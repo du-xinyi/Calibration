@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>PoseResultDialog</class>
+ <widget class="QDialog" name="PoseResultDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1120</width>
+    <height>720</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>位姿估计结果</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <layout class="QHBoxLayout" name="headerLayout">
+     <item>
+      <widget class="QLabel" name="summaryLabel">
+       <property name="text">
+        <string>位姿结果</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="headerSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QLabel" name="viewStyleLabel">
+       <property name="text">
+        <string>显示方式:</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="viewStyleCombo">
+       <item>
+        <property name="text">
+         <string>Camera-Centric（固定相机）</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>Pattern-Centric（固定标定板）</string>
+        </property>
+       </item>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QSplitter" name="poseSplitter">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <widget class="PoseVisualizationWidget" name="poseVisualization"/>
+     <widget class="QTableWidget" name="poseTable">
+      <property name="toolTip">
+       <string>外参约定：X_camera = R · X_board + t</string>
+      </property>
+      <property name="editTriggers">
+       <set>QAbstractItemView::NoEditTriggers</set>
+      </property>
+      <property name="selectionMode">
+       <enum>QAbstractItemView::SingleSelection</enum>
+      </property>
+      <property name="selectionBehavior">
+       <enum>QAbstractItemView::SelectRows</enum>
+      </property>
+      <property name="alternatingRowColors">
+       <bool>true</bool>
+      </property>
+      <column>
+       <property name="text">
+        <string>Image</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>r_x</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>r_y</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>r_z</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>t_x</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>t_y</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
+        <string>t_z</string>
+       </property>
+      </column>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="conventionLabel">
+     <property name="text">
+      <string>左键拖动旋转，滚轮缩放。外参约定：X_camera = R · X_board + t；r 为 Rodrigues 旋转向量（rad），t 单位为 mm。</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Close</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>PoseVisualizationWidget</class>
+   <extends>QWidget</extends>
+   <header>pose_result_dialog.h</header>
+   <container>0</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

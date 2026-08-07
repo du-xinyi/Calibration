@@ -1,0 +1,21 @@
+# Build directories
+cmake-build-*/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Compiled
+*.o
+*.obj
+*.exe
+*.out
+*.app
+
+# Misc
+*.pro.user
+*.pro.user.*
+compile_commands.json
