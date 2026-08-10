@@ -3,14 +3,17 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDebug>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QLabel>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QSplitter>
 #include <QSpinBox>
 #include <QStackedLayout>
@@ -19,6 +22,7 @@
 #include <QWidget>
 
 #include <cstdlib>
+#include <limits>
 
 int main(int argc, char* argv[])
 {
@@ -55,6 +59,8 @@ int main(int argc, char* argv[])
         window.findChild<QLabel*>(QStringLiteral("imageDisplay"));
     auto* imageListStack =
         window.findChild<QStackedLayout*>(QStringLiteral("imageListStack"));
+    auto* imageList =
+        window.findChild<QListWidget*>(QStringLiteral("imageList"));
     auto* cameraModelCombo =
         window.findChild<QComboBox*>(QStringLiteral("cameraModelCombo"));
     auto* boardTypeCombo =
@@ -94,6 +100,7 @@ int main(int argc, char* argv[])
         || imageListTitle == nullptr
         || imageListTitle->text() != QStringLiteral("Images (0)")
         || imageListEmptyLabel == nullptr
+        || imageList == nullptr
         || imageListStack == nullptr || imageListStack->currentIndex() != 0
         || imageDisplay == nullptr
         || imageDisplay->text()
@@ -184,7 +191,8 @@ int main(int argc, char* argv[])
 
     bool resultDialogSeen = false;
     bool poseDialogRequested = false;
-    bool poseDialogSeen = false;
+    bool exclusionRequested = false;
+    bool comparisonResultSeen = false;
     QTimer dialogMonitor;
     dialogMonitor.setInterval(10);
     QObject::connect(&dialogMonitor, &QTimer::timeout, &app, [&] {
@@ -196,56 +204,100 @@ int main(int argc, char* argv[])
             }
             if (auto* message = qobject_cast<QMessageBox*>(widget);
                 message != nullptr && message->isVisible()) {
-                resultDialogSeen = true;
+                if (exclusionRequested) {
+                    if (!message->text().contains(
+                            QStringLiteral("排除 1 张图片后重新标定"))
+                        || !message->text().contains(
+                            QStringLiteral("RMS"))) {
+                        qCritical() << "排除重标定结果缺少 RMS 对比";
+                        app.exit(EXIT_FAILURE);
+                        return;
+                    }
+                    comparisonResultSeen = true;
+                } else {
+                    resultDialogSeen = true;
+                }
                 message->accept();
             }
             if (widget->objectName() == QStringLiteral("PoseResultDialog")
-                && widget->isVisible()) {
+                && widget->isVisible() && !exclusionRequested) {
                 auto* poseTable =
                     widget->findChild<QTableWidget*>(
                         QStringLiteral("poseTable"));
                 auto* viewStyleCombo =
                     widget->findChild<QComboBox*>(
                         QStringLiteral("viewStyleCombo"));
+                auto* excludeButton =
+                    widget->findChild<QPushButton*>(
+                        QStringLiteral("excludeAndRecalibrateButton"));
                 if (poseTable == nullptr || poseTable->rowCount() < 1
+                    || poseTable->columnCount() != 9
                     || viewStyleCombo == nullptr
                     || viewStyleCombo->count() != 2
+                    || excludeButton == nullptr
                     || poseTable->horizontalHeaderItem(0) == nullptr
                     || poseTable->horizontalHeaderItem(0)->text()
-                           != QStringLiteral("Image")
+                           != QStringLiteral("排除")
                     || poseTable->horizontalHeaderItem(1) == nullptr
                     || poseTable->horizontalHeaderItem(1)->text()
+                           != QStringLiteral("Image")
+                    || poseTable->horizontalHeaderItem(2) == nullptr
+                    || poseTable->horizontalHeaderItem(2)->text()
                            != QStringLiteral("r_x")
-                    || poseTable->horizontalHeaderItem(4) == nullptr
-                    || poseTable->horizontalHeaderItem(4)->text()
+                    || poseTable->horizontalHeaderItem(5) == nullptr
+                    || poseTable->horizontalHeaderItem(5)->text()
                            != QStringLiteral("t_x")
-                    || poseTable->horizontalHeaderItem(7) == nullptr
-                    || poseTable->horizontalHeaderItem(7)->text()
+                    || poseTable->horizontalHeaderItem(8) == nullptr
+                    || poseTable->horizontalHeaderItem(8)->text()
                            != QStringLiteral("RMS (px)")) {
                     qCritical() << "位姿结果窗口内容错误";
                     app.exit(EXIT_FAILURE);
                     return;
                 }
+                double previousRms =
+                    std::numeric_limits<double>::infinity();
+                bool highErrorSeen = false;
+                for (int row = 0; row < poseTable->rowCount(); ++row) {
+                    const auto* rmsItem = poseTable->item(row, 8);
+                    auto* excludeItem = poseTable->item(row, 0);
+                    bool rmsOk = false;
+                    const double rms = rmsItem == nullptr
+                                           ? 0.0
+                                           : rmsItem->text().toDouble(&rmsOk);
+                    if (!rmsOk || rms > previousRms + 1.0e-5
+                        || excludeItem == nullptr
+                        || !excludeItem->flags().testFlag(
+                            Qt::ItemIsUserCheckable)) {
+                        qCritical() << "位姿结果没有按 RMS 降序或缺少排除项";
+                        app.exit(EXIT_FAILURE);
+                        return;
+                    }
+                    previousRms = rms;
+                    if (rms > kPerViewRmsWarningThresholdPx) {
+                        highErrorSeen = true;
+                        if (rmsItem->background().color()
+                            != QColor(255, 232, 232)) {
+                            qCritical() << "高 RMS 图片没有标红";
+                            app.exit(EXIT_FAILURE);
+                            return;
+                        }
+                    }
+                    excludeItem->setCheckState(Qt::Unchecked);
+                }
+                if (!highErrorSeen) {
+                    qCritical() << "测试数据没有产生可验证的高 RMS 图片";
+                    app.exit(EXIT_FAILURE);
+                    return;
+                }
                 viewStyleCombo->setCurrentIndex(1);
-                poseDialogSeen = true;
-                widget->close();
-
-                if (!rightPanel->isEnabled()
-                    || !cameraModelCombo->isEnabled()
-                    || !showUndistortedCheck->isEnabled()) {
-                    qCritical() << "标定结束后参数控件没有恢复";
+                poseTable->item(0, 0)->setCheckState(Qt::Checked);
+                if (!excludeButton->isEnabled()) {
+                    qCritical() << "选择排除图片后重标定按钮未启用";
                     app.exit(EXIT_FAILURE);
                     return;
                 }
-                showUndistortedCheck->setChecked(true);
-                cameraModelCombo->setCurrentIndex(1);
-                if (exportAction->isEnabled() || poseAction->isEnabled()
-                    || showUndistortedCheck->isChecked()
-                    || showUndistortedCheck->isEnabled()) {
-                    qCritical() << "切换标定算法后旧结果状态没有清除";
-                    app.exit(EXIT_FAILURE);
-                    return;
-                }
+                exclusionRequested = true;
+                excludeButton->click();
             }
         }
 
@@ -264,7 +316,27 @@ int main(int argc, char* argv[])
             poseDialogRequested = true;
             QTimer::singleShot(0, poseAction, &QAction::trigger);
         }
-        if (poseDialogSeen && !progressDialogVisible) {
+        if (comparisonResultSeen && !progressDialogVisible) {
+            if (imageList->count() != files.size() - 1
+                || imageListTitle->text()
+                       != QStringLiteral("Images (%1)")
+                              .arg(files.size() - 1)
+                || !rightPanel->isEnabled()
+                || !cameraModelCombo->isEnabled()
+                || !showUndistortedCheck->isEnabled()) {
+                qCritical() << "排除图片并重新标定后的界面状态错误";
+                app.exit(EXIT_FAILURE);
+                return;
+            }
+            showUndistortedCheck->setChecked(true);
+            cameraModelCombo->setCurrentIndex(1);
+            if (exportAction->isEnabled() || poseAction->isEnabled()
+                || showUndistortedCheck->isChecked()
+                || showUndistortedCheck->isEnabled()) {
+                qCritical() << "切换标定算法后旧结果状态没有清除";
+                app.exit(EXIT_FAILURE);
+                return;
+            }
             dialogMonitor.stop();
             QTimer::singleShot(0, &app, [&app] { app.exit(EXIT_SUCCESS); });
         }

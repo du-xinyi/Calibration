@@ -24,9 +24,6 @@
 
 namespace {
 
-constexpr double kOverallRmsWarningThreshold = 1.0;
-constexpr double kPerViewRmsWarningThreshold = 2.0;
-
 /// 检测棋盘格角点，按方法选择不同的 OpenCV 实现。
 bool detectCorners(const cv::Mat& gray, const cv::Size& pattern,
                    CalibrationMethod method,
@@ -644,9 +641,9 @@ CalibrationResult Calibrator::calibrate(const QStringList& files,
                                  .arg(worstPose->reprojectionError, 0, 'f', 3)
                                  .arg(QFileInfo(worstPose->imagePath).fileName());
             result.qualityWarning =
-                rms > kOverallRmsWarningThreshold
+                rms > kOverallRmsWarningThresholdPx
                 || worstPose->reprojectionError
-                       > kPerViewRmsWarningThreshold;
+                       > kPerViewRmsWarningThresholdPx;
         }
         if (result.qualityWarning) {
             result.report += QObject::tr(

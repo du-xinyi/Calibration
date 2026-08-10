@@ -39,6 +39,8 @@
 
 #include <QtConcurrent>
 
+#include <cmath>
+
 namespace {
 
 constexpr int kThumbnailSize = 96;
@@ -423,6 +425,12 @@ void MainWindow::onAddImagesFromFolder()
 
 void MainWindow::onCalibrate()
 {
+    startCalibration();
+}
+
+void MainWindow::startCalibration(
+    std::optional<CalibrationComparison> comparison)
+{
     if (calibActive_) {
         return;  // 已有标定在运行，拒绝重入（否则旧 finished 会破坏新状态）
     }
@@ -480,7 +488,7 @@ void MainWindow::onCalibrate()
 
     calibWatcher_ = new QFutureWatcher<CalibrationResult>(this);
     connect(calibWatcher_, &QFutureWatcher<CalibrationResult>::finished, this,
-            [this, files, opts] {
+            [this, files, opts, comparison] {
                 CalibrationResult result = calibWatcher_->result();
                 calibWatcher_->deleteLater();
                 calibWatcher_ = nullptr;
@@ -495,6 +503,27 @@ void MainWindow::onCalibrate()
                     result = {};
                     result.report = tr(
                         "标定期间参数或图片列表发生了变化，结果已丢弃。请重新标定。");
+                }
+                if (comparison.has_value()) {
+                    if (result.success) {
+                        const double rmsChange =
+                            result.rmsError - comparison->baselineRms;
+                        result.report += tr(
+                            "\n\n排除 %1 张图片后重新标定：RMS %2 → %3 px（%4 %5 px）。")
+                                             .arg(comparison->excludedImages)
+                                             .arg(comparison->baselineRms,
+                                                  0, 'f', 3)
+                                             .arg(result.rmsError, 0, 'f', 3)
+                                             .arg(rmsChange <= 0.0
+                                                      ? tr("下降")
+                                                      : tr("上升"))
+                                             .arg(std::abs(rmsChange),
+                                                  0, 'f', 3);
+                    } else {
+                        result.report += tr(
+                            "\n\n已排除 %1 张图片，但重新标定未成功，无法比较 RMS。")
+                                             .arg(comparison->excludedImages);
+                    }
                 }
                 presentResult(result);
             });
@@ -543,12 +572,58 @@ void MainWindow::onShowPoses()
 
     auto* dialog = new PoseResultDialog(lastResult_, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &PoseResultDialog::excludeImagesRequested,
+            this, &MainWindow::onExcludeImagesAndRecalibrate);
     connect(dialog, &QObject::destroyed,
             this, [this] { poseDialog_ = nullptr; });
     poseDialog_ = dialog;
     dialog->show();
     dialog->raise();
     dialog->activateWindow();
+}
+
+void MainWindow::onExcludeImagesAndRecalibrate(
+    const QStringList& imagePaths, double baselineRms)
+{
+    if (calibActive_ || !lastResult_.success || imagePaths.isEmpty()) {
+        return;
+    }
+
+    const QSet<QString> excludedPaths(imagePaths.begin(), imagePaths.end());
+    int matchedCount = 0;
+    for (int row = 0; row < imageList_->count(); ++row) {
+        const QListWidgetItem* item = imageList_->item(row);
+        if (item != nullptr
+            && excludedPaths.contains(
+                item->data(kRoleFilePath).toString())) {
+            ++matchedCount;
+        }
+    }
+    if (matchedCount == 0) {
+        return;
+    }
+    if (imageList_->count() - matchedCount < 3) {
+        QMessageBox::warning(
+            this, tr("排除图片"),
+            tr("排除后少于 3 张图片，无法重新标定。"));
+        return;
+    }
+
+    for (int row = imageList_->count() - 1; row >= 0; --row) {
+        const QListWidgetItem* item = imageList_->item(row);
+        if (item != nullptr
+            && excludedPaths.contains(
+                item->data(kRoleFilePath).toString())) {
+            std::unique_ptr<QListWidgetItem> removedItem(
+                imageList_->takeItem(row));
+        }
+    }
+    currentPixmap_ = {};
+    imageDisplay_->clear();
+    statusBar()->showMessage(
+        tr("已排除 %1 张图片，正在重新标定").arg(matchedCount),
+        5000);
+    startCalibration(CalibrationComparison{baselineRms, matchedCount});
 }
 
 void MainWindow::onExportParameters()

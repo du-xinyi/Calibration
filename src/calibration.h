@@ -10,6 +10,9 @@
 #include <functional>
 #include <vector>
 
+inline constexpr double kOverallRmsWarningThresholdPx = 1.0; ///< 整体 RMS 告警阈值
+inline constexpr double kPerViewRmsWarningThresholdPx = 2.0; ///< 单图 RMS 告警阈值
+
 /**
  * @brief 标定板类型。
  */

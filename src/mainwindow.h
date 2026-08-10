@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 
 class QAction;
 class QCheckBox;
@@ -62,6 +63,8 @@ private slots:
     void onBoardTypeChanged();
     void onCalibrationOptionsChanged();
     void onDisplayModeChanged();
+    void onExcludeImagesAndRecalibrate(const QStringList& imagePaths,
+                                       double baselineRms);
 
 private:
     void buildMenuBar();
@@ -72,6 +75,13 @@ private:
     void updateUiState();
     /// 当前输入已变化时丢弃旧标定结果，防止误导出不匹配的参数。
     void invalidateCalibrationResult();
+
+    struct CalibrationComparison {
+        double baselineRms = 0.0;
+        int excludedImages = 0;
+    };
+    void startCalibration(
+        std::optional<CalibrationComparison> comparison = std::nullopt);
 
     void showImage(const QString& filePath, bool* found = nullptr);
     void fitImageToView();

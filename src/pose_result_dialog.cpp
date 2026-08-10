@@ -13,6 +13,7 @@
 #include <QPaintEvent>
 #include <QPen>
 #include <QPointF>
+#include <QPushButton>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QWheelEvent>
@@ -23,10 +24,15 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <utility>
 #include <vector>
 
 namespace {
+
+constexpr int kPoseIndexRole = Qt::UserRole;
+constexpr int kImagePathRole = Qt::UserRole + 1;
+constexpr int kRmsValueRole = Qt::UserRole + 2;
 
 struct Line3d {
     cv::Vec3d start;
@@ -419,21 +425,30 @@ void PoseVisualizationWidget::wheelEvent(QWheelEvent* event)
 PoseResultDialog::PoseResultDialog(const CalibrationResult& result,
                                    QWidget* parent)
     : QDialog(parent),
-      ui_(std::make_unique<Ui::PoseResultDialog>())
+      ui_(std::make_unique<Ui::PoseResultDialog>()),
+      baselineRms_(result.rmsError)
 {
     ui_->setupUi(this);
     ui_->poseVisualization->setCalibrationResult(result);
     ui_->summaryLabel->setText(
-        tr("%1 个有效位姿 · RMS %2 px · 平移单位：mm")
+        tr("%1 个有效位姿 · RMS %2 px · 按单图 RMS 降序 · 红色 > %3 px")
             .arg(result.poses.size())
-            .arg(result.rmsError, 0, 'f', 3));
+            .arg(result.rmsError, 0, 'f', 3)
+            .arg(kPerViewRmsWarningThresholdPx, 0, 'f', 1));
     populatePoseTable(result);
+
+    excludeButton_ = ui_->buttonBox->addButton(
+        tr("排除所选并重新标定"), QDialogButtonBox::ActionRole);
+    excludeButton_->setObjectName(
+        QStringLiteral("excludeAndRecalibrateButton"));
 
     ui_->poseSplitter->setStretchFactor(0, 3);
     ui_->poseSplitter->setStretchFactor(1, 2);
     ui_->poseTable->horizontalHeader()->setSectionResizeMode(
-        0, QHeaderView::Stretch);
-    for (int column = 1; column < ui_->poseTable->columnCount(); ++column) {
+        0, QHeaderView::ResizeToContents);
+    ui_->poseTable->horizontalHeader()->setSectionResizeMode(
+        1, QHeaderView::Stretch);
+    for (int column = 2; column < ui_->poseTable->columnCount(); ++column) {
         ui_->poseTable->horizontalHeader()->setSectionResizeMode(
             column, QHeaderView::ResizeToContents);
     }
@@ -448,10 +463,30 @@ PoseResultDialog::PoseResultDialog(const CalibrationResult& result,
             });
     connect(ui_->poseTable, &QTableWidget::currentCellChanged, this,
             [this](int currentRow, int, int, int) {
-                ui_->poseVisualization->setHighlightedPose(currentRow);
+                const QTableWidgetItem* imageItem =
+                    ui_->poseTable->item(currentRow, 1);
+                ui_->poseVisualization->setHighlightedPose(
+                    imageItem == nullptr
+                        ? -1
+                        : imageItem->data(kPoseIndexRole).toInt());
             });
+    connect(ui_->poseTable, &QTableWidget::itemChanged, this,
+            [this](QTableWidgetItem* item) {
+                if (item != nullptr && item->column() == 0) {
+                    updateExcludeButton();
+                }
+            });
+    connect(excludeButton_, &QPushButton::clicked, this, [this] {
+        const QStringList paths = checkedImagePaths();
+        if (paths.isEmpty()) {
+            return;
+        }
+        emit excludeImagesRequested(paths, baselineRms_);
+        accept();
+    });
     connect(ui_->buttonBox, &QDialogButtonBox::rejected,
             this, &QDialog::reject);
+    updateExcludeButton();
 
     if (!result.poses.empty()) {
         ui_->poseTable->selectRow(0);
@@ -462,21 +497,85 @@ PoseResultDialog::~PoseResultDialog() = default;
 
 void PoseResultDialog::populatePoseTable(const CalibrationResult& result)
 {
+    std::vector<size_t> poseOrder(result.poses.size());
+    std::iota(poseOrder.begin(), poseOrder.end(), 0U);
+    std::stable_sort(
+        poseOrder.begin(), poseOrder.end(),
+        [&result](size_t lhs, size_t rhs) {
+            return result.poses[lhs].reprojectionError
+                   > result.poses[rhs].reprojectionError;
+        });
+
     ui_->poseTable->setRowCount(static_cast<int>(result.poses.size()));
-    for (size_t index = 0; index < result.poses.size(); ++index) {
-        const CalibrationPose& pose = result.poses[index];
-        const int row = static_cast<int>(index);
+    for (size_t sortedIndex = 0; sortedIndex < poseOrder.size();
+         ++sortedIndex) {
+        const size_t poseIndex = poseOrder[sortedIndex];
+        const CalibrationPose& pose = result.poses[poseIndex];
+        const int row = static_cast<int>(sortedIndex);
+        const bool highError =
+            pose.reprojectionError > kPerViewRmsWarningThresholdPx;
+
+        auto* excludeItem = new QTableWidgetItem;
+        excludeItem->setFlags(
+            Qt::ItemIsEnabled | Qt::ItemIsSelectable
+            | Qt::ItemIsUserCheckable);
+        excludeItem->setCheckState(highError ? Qt::Checked : Qt::Unchecked);
+        excludeItem->setData(kImagePathRole, pose.imagePath);
+        excludeItem->setTextAlignment(Qt::AlignCenter);
+        excludeItem->setToolTip(
+            tr("勾选后可从图片列表移除并重新标定"));
+        ui_->poseTable->setItem(row, 0, excludeItem);
+
         auto* imageItem =
             new QTableWidgetItem(QFileInfo(pose.imagePath).fileName());
         imageItem->setToolTip(pose.imagePath);
-        ui_->poseTable->setItem(row, 0, imageItem);
+        imageItem->setData(kPoseIndexRole, static_cast<int>(poseIndex));
+        ui_->poseTable->setItem(row, 1, imageItem);
         for (int axis = 0; axis < 3; ++axis) {
             ui_->poseTable->setItem(
-                row, axis + 1, numericItem(pose.rotationVector[axis]));
+                row, axis + 2, numericItem(pose.rotationVector[axis]));
             ui_->poseTable->setItem(
-                row, axis + 4, numericItem(pose.translationVector[axis]));
+                row, axis + 5, numericItem(pose.translationVector[axis]));
         }
-        ui_->poseTable->setItem(
-            row, 7, numericItem(pose.reprojectionError));
+        auto* rmsItem = numericItem(pose.reprojectionError);
+        rmsItem->setData(kRmsValueRole, pose.reprojectionError);
+        ui_->poseTable->setItem(row, 8, rmsItem);
+
+        if (highError) {
+            for (int column = 0; column < ui_->poseTable->columnCount();
+                 ++column) {
+                QTableWidgetItem* item = ui_->poseTable->item(row, column);
+                item->setBackground(QColor(255, 232, 232));
+                item->setForeground(QColor(150, 35, 35));
+            }
+        }
     }
+}
+
+QStringList PoseResultDialog::checkedImagePaths() const
+{
+    QStringList paths;
+    for (int row = 0; row < ui_->poseTable->rowCount(); ++row) {
+        const QTableWidgetItem* item = ui_->poseTable->item(row, 0);
+        if (item != nullptr && item->checkState() == Qt::Checked) {
+            paths.push_back(item->data(kImagePathRole).toString());
+        }
+    }
+    return paths;
+}
+
+void PoseResultDialog::updateExcludeButton()
+{
+    const int checkedCount = checkedImagePaths().size();
+    const int remainingCount = ui_->poseTable->rowCount() - checkedCount;
+    const bool canRecalibrate = checkedCount > 0 && remainingCount >= 3;
+    excludeButton_->setEnabled(canRecalibrate);
+    excludeButton_->setText(
+        checkedCount == 0
+            ? tr("排除所选并重新标定")
+            : tr("排除所选并重新标定 (%1)").arg(checkedCount));
+    excludeButton_->setToolTip(
+        remainingCount < 3
+            ? tr("至少保留 3 张有效图片")
+            : tr("从图片列表移除勾选项，并立即重新标定"));
 }

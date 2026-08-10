@@ -83,6 +83,11 @@
       </property>
       <column>
        <property name="text">
+        <string>排除</string>
+       </property>
+      </column>
+      <column>
+       <property name="text">
         <string>Image</string>
        </property>
       </column>

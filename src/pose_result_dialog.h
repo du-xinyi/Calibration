@@ -4,12 +4,14 @@
 
 #include <QDialog>
 #include <QPointF>
+#include <QStringList>
 #include <QWidget>
 
 #include <memory>
 
 class QMouseEvent;
 class QPaintEvent;
+class QPushButton;
 class QWheelEvent;
 
 namespace Ui {
@@ -63,13 +65,24 @@ private:
  * @brief 展示全部有效标定图片的外参数值与位姿分布。
  */
 class PoseResultDialog final : public QDialog {
+    Q_OBJECT
+
 public:
     explicit PoseResultDialog(const CalibrationResult& result,
                               QWidget* parent = nullptr);
     ~PoseResultDialog() override;
 
+signals:
+    /// 请求主窗口移除勾选图片，并使用剩余图片重新标定。
+    void excludeImagesRequested(const QStringList& imagePaths,
+                                double baselineRms);
+
 private:
     void populatePoseTable(const CalibrationResult& result);
+    QStringList checkedImagePaths() const;
+    void updateExcludeButton();
 
     std::unique_ptr<Ui::PoseResultDialog> ui_;
+    QPushButton* excludeButton_ = nullptr;
+    double baselineRms_ = 0.0;
 };
