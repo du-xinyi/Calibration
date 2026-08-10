@@ -7,6 +7,8 @@
 #include "calibration.h"
 
 #include <QFutureWatcher>
+#include <QPointer>
+#include <QTimer>
 
 #include <atomic>
 #include <memory>
@@ -20,6 +22,8 @@ class QListWidget;
 class QProgressDialog;
 class QScrollArea;
 class QSpinBox;
+
+class PoseResultDialog;
 
 namespace Ui {
 class MainWindow;
@@ -56,6 +60,7 @@ private slots:
     void onImageSelectionChanged();
     void onCameraModelChanged();
     void onBoardTypeChanged();
+    void onCalibrationOptionsChanged();
     void onDisplayModeChanged();
 
 private:
@@ -65,6 +70,8 @@ private:
     void buildStatusBar();
     /// 根据图片数量、标定状态和运行状态刷新空提示及可用动作。
     void updateUiState();
+    /// 当前输入已变化时丢弃旧标定结果，防止误导出不匹配的参数。
+    void invalidateCalibrationResult();
 
     void showImage(const QString& filePath, bool* found = nullptr);
     void fitImageToView();
@@ -113,4 +120,6 @@ private:
     QFutureWatcher<CalibrationResult>* calibWatcher_ = nullptr; ///< 后台标定 future
     std::atomic<bool> calibCanceled_{false};    ///< 跨线程取消标志
     bool calibActive_ = false;                  ///< 标定进行中标志（防止重入）
+    QTimer* debounceTimer_ = nullptr;           ///< 预览刷新的防抖计时器
+    QPointer<PoseResultDialog> poseDialog_;     ///< 已打开的位姿对话框（防止重复）
 };

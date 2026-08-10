@@ -27,6 +27,7 @@ public:
     };
 
     explicit PoseVisualizationWidget(QWidget* parent = nullptr);
+    ~PoseVisualizationWidget() override;
 
     void setCalibrationResult(const CalibrationResult& result);
     void setViewStyle(ViewStyle style);
@@ -42,9 +43,13 @@ protected:
     void wheelEvent(QWheelEvent* event) override;
 
 private:
+    struct Geometry;
+
     void resetView();
+    void rebuildGeometry();
 
     CalibrationResult result_;
+    std::unique_ptr<Geometry> geometry_;
     ViewStyle viewStyle_ = ViewStyle::CameraCentric;
     int highlightedPose_ = 0;
     QPointF lastMousePosition_;

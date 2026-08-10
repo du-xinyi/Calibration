@@ -48,25 +48,38 @@ cv::Matx33d rotationMatrix(const cv::Vec3d& rotationVector)
     return rotation;
 }
 
-QPointF projectView(const cv::Vec3d& point, double yawDegrees,
-                    double pitchDegrees, bool flipZ)
-{
-    constexpr double kDegreesToRadians =
-        3.14159265358979323846 / 180.0;
-    const double yaw = yawDegrees * kDegreesToRadians;
-    const double pitch = pitchDegrees * kDegreesToRadians;
-    const double cosineYaw = std::cos(yaw);
-    const double sineYaw = std::sin(yaw);
-    const double cosinePitch = std::cos(pitch);
-    const double sinePitch = std::sin(pitch);
+struct ViewProjection {
+    explicit ViewProjection(double yawDegrees, double pitchDegrees,
+                            bool shouldFlipZ)
+        : flipZ(shouldFlipZ)
+    {
+        constexpr double kDegreesToRadians =
+            3.14159265358979323846 / 180.0;
+        const double yaw = yawDegrees * kDegreesToRadians;
+        const double pitch = pitchDegrees * kDegreesToRadians;
+        cosineYaw = std::cos(yaw);
+        sineYaw = std::sin(yaw);
+        cosinePitch = std::cos(pitch);
+        sinePitch = std::sin(pitch);
+    }
 
-    const double z = flipZ ? -point[2] : point[2];
-    const double rotatedX =
-        cosineYaw * point[0] - sineYaw * point[1];
-    const double rotatedY =
-        sineYaw * point[0] + cosineYaw * point[1];
-    return {rotatedX, sinePitch * rotatedY - cosinePitch * z};
-}
+    QPointF project(const cv::Vec3d& point) const
+    {
+        const double z = flipZ ? -point[2] : point[2];
+        const double rotatedX =
+            cosineYaw * point[0] - sineYaw * point[1];
+        const double rotatedY =
+            sineYaw * point[0] + cosineYaw * point[1];
+        return {rotatedX,
+                sinePitch * rotatedY - cosinePitch * z};
+    }
+
+    double cosineYaw = 1.0;
+    double sineYaw = 0.0;
+    double cosinePitch = 1.0;
+    double sinePitch = 0.0;
+    bool flipZ = false;
+};
 
 void appendAxes(std::vector<Line3d>& lines, std::vector<Label3d>& labels,
                 double length, bool reverseZ)
@@ -146,19 +159,28 @@ QTableWidgetItem* numericItem(double value)
 
 }  // namespace
 
+struct PoseVisualizationWidget::Geometry {
+    std::vector<Line3d> lines;
+    std::vector<Label3d> labels;
+};
+
 PoseVisualizationWidget::PoseVisualizationWidget(QWidget* parent)
-    : QWidget(parent)
+    : QWidget(parent),
+      geometry_(std::make_unique<Geometry>())
 {
     setMinimumSize(480, 360);
     setCursor(Qt::OpenHandCursor);
     setToolTip(tr("按住鼠标左键拖动旋转视角，滚轮缩放"));
 }
 
+PoseVisualizationWidget::~PoseVisualizationWidget() = default;
+
 void PoseVisualizationWidget::setCalibrationResult(
     const CalibrationResult& result)
 {
     result_ = result;
     highlightedPose_ = result_.poses.empty() ? -1 : 0;
+    rebuildGeometry();
     update();
 }
 
@@ -169,12 +191,17 @@ void PoseVisualizationWidget::setViewStyle(ViewStyle style)
     }
     viewStyle_ = style;
     resetView();
+    rebuildGeometry();
     update();
 }
 
 void PoseVisualizationWidget::setHighlightedPose(int index)
 {
+    if (highlightedPose_ == index) {
+        return;
+    }
     highlightedPose_ = index;
+    rebuildGeometry();
     update();
 }
 
@@ -189,6 +216,74 @@ void PoseVisualizationWidget::resetView()
     pitchDegrees_ =
         viewStyle_ == ViewStyle::PatternCentric ? 25.0 : 30.0;
     zoom_ = 1.0;
+}
+
+void PoseVisualizationWidget::rebuildGeometry()
+{
+    geometry_->lines.clear();
+    geometry_->labels.clear();
+    if (!result_.success || result_.poses.empty()) {
+        return;
+    }
+
+    const double boardWidth =
+        result_.options.boardSize.width() * result_.options.squareSize;
+    const double boardHeight =
+        result_.options.boardSize.height() * result_.options.squareSize;
+    const double referenceSize = std::max(boardWidth, boardHeight);
+    const size_t poseCount = result_.poses.size();
+    const bool patternCentric =
+        viewStyle_ == ViewStyle::PatternCentric;
+    geometry_->lines.reserve(
+        (patternCentric ? 9U : 11U)
+        + poseCount * (patternCentric ? 8U : 6U));
+    geometry_->labels.reserve(4U + poseCount);
+    appendAxes(geometry_->lines, geometry_->labels,
+               referenceSize * 0.55, patternCentric);
+
+    if (!patternCentric) {
+        appendCamera(geometry_->lines, geometry_->labels,
+                     cv::Matx33d::eye(), {}, referenceSize * 0.08,
+                     QColor(45, 50, 60), 2.0,
+                     QStringLiteral("Camera"));
+        for (size_t index = 0; index < poseCount; ++index) {
+            const CalibrationPose& pose = result_.poses[index];
+            const bool highlighted =
+                static_cast<int>(index) == highlightedPose_;
+            const QColor color =
+                highlighted ? QColor(235, 130, 35)
+                            : QColor(50, 115, 205, 175);
+            appendBoard(geometry_->lines, geometry_->labels,
+                        rotationMatrix(pose.rotationVector),
+                        pose.translationVector, boardWidth, boardHeight,
+                        color, highlighted ? 3.0 : 1.2,
+                        QString::number(index + 1));
+        }
+        return;
+    }
+
+    appendBoard(geometry_->lines, geometry_->labels,
+                cv::Matx33d::eye(), {}, boardWidth, boardHeight,
+                QColor(45, 50, 60), 2.0,
+                QStringLiteral("Calibration Board"));
+    for (size_t index = 0; index < poseCount; ++index) {
+        const CalibrationPose& pose = result_.poses[index];
+        const cv::Matx33d boardToCamera =
+            rotationMatrix(pose.rotationVector);
+        const cv::Matx33d cameraToBoard = boardToCamera.t();
+        const cv::Vec3d cameraPosition =
+            -(cameraToBoard * pose.translationVector);
+        const bool highlighted =
+            static_cast<int>(index) == highlightedPose_;
+        const QColor color =
+            highlighted ? QColor(235, 130, 35)
+                        : QColor(50, 115, 205, 175);
+        appendCamera(geometry_->lines, geometry_->labels,
+                     cameraToBoard, cameraPosition,
+                     referenceSize * 0.08, color,
+                     highlighted ? 3.0 : 1.2,
+                     QString::number(index + 1));
+    }
 }
 
 void PoseVisualizationWidget::paintEvent(QPaintEvent* event)
@@ -207,61 +302,19 @@ void PoseVisualizationWidget::paintEvent(QPaintEvent* event)
         return;
     }
 
-    const double boardWidth =
-        result_.options.boardSize.width() * result_.options.squareSize;
-    const double boardHeight =
-        result_.options.boardSize.height() * result_.options.squareSize;
-    const double referenceSize = std::max(boardWidth, boardHeight);
-
-    std::vector<Line3d> lines;
-    std::vector<Label3d> labels;
     const bool patternCentric =
         viewStyle_ == ViewStyle::PatternCentric;
-    appendAxes(lines, labels, referenceSize * 0.55, patternCentric);
-
-    if (!patternCentric) {
-        appendCamera(lines, labels, cv::Matx33d::eye(), {}, referenceSize * 0.08,
-                     QColor(45, 50, 60), 2.0, QStringLiteral("Camera"));
-        for (size_t index = 0; index < result_.poses.size(); ++index) {
-            const CalibrationPose& pose = result_.poses[index];
-            const bool highlighted =
-                static_cast<int>(index) == highlightedPose_;
-            const QColor color =
-                highlighted ? QColor(235, 130, 35) : QColor(50, 115, 205, 175);
-            appendBoard(lines, labels, rotationMatrix(pose.rotationVector),
-                        pose.translationVector, boardWidth, boardHeight, color,
-                        highlighted ? 3.0 : 1.2,
-                        QString::number(index + 1));
-        }
-    } else {
-        appendBoard(lines, labels, cv::Matx33d::eye(), {}, boardWidth,
-                    boardHeight, QColor(45, 50, 60), 2.0,
-                    QStringLiteral("Calibration Board"));
-        for (size_t index = 0; index < result_.poses.size(); ++index) {
-            const CalibrationPose& pose = result_.poses[index];
-            const cv::Matx33d boardToCamera =
-                rotationMatrix(pose.rotationVector);
-            const cv::Matx33d cameraToBoard = boardToCamera.t();
-            const cv::Vec3d cameraPosition =
-                -(cameraToBoard * pose.translationVector);
-            const bool highlighted =
-                static_cast<int>(index) == highlightedPose_;
-            const QColor color =
-                highlighted ? QColor(235, 130, 35) : QColor(50, 115, 205, 175);
-            appendCamera(lines, labels, cameraToBoard, cameraPosition,
-                         referenceSize * 0.08, color,
-                         highlighted ? 3.0 : 1.2,
-                         QString::number(index + 1));
-        }
-    }
+    const std::vector<Line3d>& lines = geometry_->lines;
+    const std::vector<Label3d>& labels = geometry_->labels;
 
     double minX = std::numeric_limits<double>::max();
     double minY = std::numeric_limits<double>::max();
     double maxX = std::numeric_limits<double>::lowest();
     double maxY = std::numeric_limits<double>::lowest();
-    const bool flipZ = patternCentric;
+    const ViewProjection projection(yawDegrees_, pitchDegrees_,
+                                    patternCentric);
     const auto projectPoint = [&](const cv::Vec3d& point) {
-        return projectView(point, yawDegrees_, pitchDegrees_, flipZ);
+        return projection.project(point);
     };
     const auto includePoint = [&](const cv::Vec3d& point) {
         const QPointF projected = projectPoint(point);
@@ -423,5 +476,7 @@ void PoseResultDialog::populatePoseTable(const CalibrationResult& result)
             ui_->poseTable->setItem(
                 row, axis + 4, numericItem(pose.translationVector[axis]));
         }
+        ui_->poseTable->setItem(
+            row, 7, numericItem(pose.reprojectionError));
     }
 }

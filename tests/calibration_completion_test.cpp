@@ -217,7 +217,10 @@ int main(int argc, char* argv[])
                            != QStringLiteral("r_x")
                     || poseTable->horizontalHeaderItem(4) == nullptr
                     || poseTable->horizontalHeaderItem(4)->text()
-                           != QStringLiteral("t_x")) {
+                           != QStringLiteral("t_x")
+                    || poseTable->horizontalHeaderItem(7) == nullptr
+                    || poseTable->horizontalHeaderItem(7)->text()
+                           != QStringLiteral("RMS (px)")) {
                     qCritical() << "位姿结果窗口内容错误";
                     app.exit(EXIT_FAILURE);
                     return;
@@ -225,6 +228,19 @@ int main(int argc, char* argv[])
                 viewStyleCombo->setCurrentIndex(1);
                 poseDialogSeen = true;
                 widget->close();
+
+                if (!rightPanel->isEnabled()
+                    || !cameraModelCombo->isEnabled()) {
+                    qCritical() << "标定结束后参数控件没有恢复";
+                    app.exit(EXIT_FAILURE);
+                    return;
+                }
+                cameraModelCombo->setCurrentIndex(1);
+                if (exportAction->isEnabled() || poseAction->isEnabled()) {
+                    qCritical() << "切换标定算法后旧结果没有失效";
+                    app.exit(EXIT_FAILURE);
+                    return;
+                }
             }
         }
 
@@ -250,10 +266,16 @@ int main(int argc, char* argv[])
     });
     dialogMonitor.start();
 
-    QTimer::singleShot(0, &window, [&window, &app] {
+    QTimer::singleShot(0, &window,
+                       [&window, &app, rightPanel, cameraModelCombo] {
         if (!QMetaObject::invokeMethod(
                 &window, "onCalibrate", Qt::DirectConnection)) {
             qCritical() << "无法调用标定槽函数";
+            app.exit(EXIT_FAILURE);
+            return;
+        }
+        if (rightPanel->isEnabled() || cameraModelCombo->isEnabled()) {
+            qCritical() << "标定运行期间参数控件仍可修改";
             app.exit(EXIT_FAILURE);
         }
     });

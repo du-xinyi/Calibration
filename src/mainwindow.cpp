@@ -33,6 +33,7 @@
 #include <QStandardPaths>
 #include <QStatusBar>
 #include <QStyle>
+#include <QTimer>
 #include <QToolBar>
 #include <QWidget>
 
@@ -79,6 +80,21 @@ QString supportedImageDialogFilter()
     return QStringLiteral("图片 (%1)").arg(exts.join(QLatin1Char(' ')));
 }
 
+bool sameCalibrationOptions(const CalibrationOptions& lhs,
+                            const CalibrationOptions& rhs)
+{
+    return lhs.cameraModel == rhs.cameraModel
+           && lhs.boardType == rhs.boardType
+           && lhs.boardSize == rhs.boardSize
+           && lhs.squareSize == rhs.squareSize
+           && lhs.markerSize == rhs.markerSize
+           && lhs.dictionary == rhs.dictionary
+           && lhs.method == rhs.method
+           && lhs.skew == rhs.skew
+           && lhs.tangential == rhs.tangential
+           && lhs.radialCoeffs == rhs.radialCoeffs;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -106,12 +122,15 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
-    // 标定在后台线程运行时若主窗口被销毁，worker 仍会读取 calibCanceled_ 等
-    // 已释放成员，造成 use-after-free / SIGSEGV。先取消并等待其结束。
-    if (calibWatcher_ != nullptr && calibWatcher_->isRunning()) {
-        calibCanceled_.store(true);
-        calibWatcher_->waitForFinished();
+    if (calibWatcher_ != nullptr) {
+        disconnect(calibWatcher_, &QFutureWatcher<CalibrationResult>::finished,
+                   this, nullptr);
+        if (calibWatcher_->isRunning()) {
+            calibCanceled_.store(true);
+            calibWatcher_->waitForFinished();
+        }
     }
+    QCoreApplication::removePostedEvents(this);
 }
 
 void MainWindow::buildMenuBar()
@@ -246,6 +265,13 @@ void MainWindow::configureCentralWidget()
     connect(showUndistortedCheck_, &QCheckBox::toggled, this,
             &MainWindow::onDisplayModeChanged);
 
+    // 参数变化时防抖刷新预览，避免连续调节时的重复检测。
+    debounceTimer_ = new QTimer(this);
+    debounceTimer_->setSingleShot(true);
+    debounceTimer_->setInterval(150);
+    connect(debounceTimer_, &QTimer::timeout, this,
+            &MainWindow::onImageSelectionChanged);
+
     // 参数变化时刷新预览（重新检测角点）。
     connect(cameraModelCombo_,
             qOverload<int>(&QComboBox::currentIndexChanged), this,
@@ -255,25 +281,32 @@ void MainWindow::configureCentralWidget()
             &MainWindow::onBoardTypeChanged);
     connect(boardColsSpin_,
             qOverload<int>(&QSpinBox::valueChanged), this,
-            &MainWindow::onDisplayModeChanged);
+            &MainWindow::onCalibrationOptionsChanged);
     connect(boardRowsSpin_,
             qOverload<int>(&QSpinBox::valueChanged), this,
-            &MainWindow::onDisplayModeChanged);
+            &MainWindow::onCalibrationOptionsChanged);
     connect(methodCombo_,
             qOverload<int>(&QComboBox::currentIndexChanged), this,
-            &MainWindow::onDisplayModeChanged);
+            &MainWindow::onCalibrationOptionsChanged);
     connect(markerSizeSpin_,
             qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-            &MainWindow::onDisplayModeChanged);
+            &MainWindow::onCalibrationOptionsChanged);
     connect(dictionaryCombo_,
             qOverload<int>(&QComboBox::currentIndexChanged), this,
-            &MainWindow::onDisplayModeChanged);
+            &MainWindow::onCalibrationOptionsChanged);
+    connect(skewCheck_, &QCheckBox::toggled, this,
+            &MainWindow::onCalibrationOptionsChanged);
+    connect(tangentialCheck_, &QCheckBox::toggled, this,
+            &MainWindow::onCalibrationOptionsChanged);
+    connect(radialCoeffSpin_,
+            qOverload<int>(&QSpinBox::valueChanged), this,
+            &MainWindow::onCalibrationOptionsChanged);
     connect(squareSizeSpin_,
             qOverload<double>(&QDoubleSpinBox::valueChanged), this,
             [this](double squareSize) {
                 markerSizeSpin_->setMaximum(
                     qMax(0.001, squareSize - 0.001));
-                onDisplayModeChanged();
+                onCalibrationOptionsChanged();
             });
     onCameraModelChanged();
     onBoardTypeChanged();
@@ -330,6 +363,20 @@ void MainWindow::updateUiState()
     poseAction_->setToolTip(
         hasCalibration ? tr("查看位姿估计结果")
                        : tr("完成一次成功标定后查看位姿"));
+    ui_->rightPanel->setEnabled(!busy);
+    imageList_->setEnabled(!busy);
+}
+
+void MainWindow::invalidateCalibrationResult()
+{
+    lastResult_ = {};
+    if (statusRmsError_ != nullptr) {
+        statusRmsError_->setText(tr("RMS: --"));
+    }
+    if (poseDialog_) {
+        poseDialog_->close();
+    }
+    updateUiState();
 }
 
 void MainWindow::onAddImages()
@@ -386,6 +433,7 @@ void MainWindow::onCalibrate()
     }
 
     const CalibrationOptions opts = currentOptions();
+    invalidateCalibrationResult();
 
     // 模态进度对话框（带 取消）。标定在后台线程执行，避免阻塞 UI。
     progressDialog_ = new QProgressDialog(tr("正在检测角点..."),
@@ -430,8 +478,8 @@ void MainWindow::onCalibrate()
 
     calibWatcher_ = new QFutureWatcher<CalibrationResult>(this);
     connect(calibWatcher_, &QFutureWatcher<CalibrationResult>::finished, this,
-            [this] {
-                const CalibrationResult result = calibWatcher_->result();
+            [this, files, opts] {
+                CalibrationResult result = calibWatcher_->result();
                 calibWatcher_->deleteLater();
                 calibWatcher_ = nullptr;
                 calibActive_ = false;
@@ -439,6 +487,12 @@ void MainWindow::onCalibrate()
                     progressDialog_->close();
                     progressDialog_->deleteLater();
                     progressDialog_ = nullptr;
+                }
+                if (!sameCalibrationOptions(opts, currentOptions())
+                    || files != collectFiles()) {
+                    result = {};
+                    result.report = tr(
+                        "标定期间参数或图片列表发生了变化，结果已丢弃。请重新标定。");
                 }
                 presentResult(result);
             });
@@ -457,8 +511,13 @@ void MainWindow::presentResult(const CalibrationResult& result)
     if (result.success) {
         statusRmsError_->setText(
             tr("RMS: %1 px").arg(result.rmsError, 0, 'f', 3));
-        QMessageBox::information(this, tr("标定结果"),
+        if (result.qualityWarning) {
+            QMessageBox::warning(this, tr("标定结果质量警告"),
                                  result.report);
+        } else {
+            QMessageBox::information(this, tr("标定结果"),
+                                     result.report);
+        }
     } else {
         statusRmsError_->setText(tr("RMS: --"));
         QMessageBox::warning(this, tr("标定"), result.report);
@@ -474,8 +533,17 @@ void MainWindow::onShowPoses()
         return;
     }
 
+    if (poseDialog_) {
+        poseDialog_->raise();
+        poseDialog_->activateWindow();
+        return;
+    }
+
     auto* dialog = new PoseResultDialog(lastResult_, this);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
+    connect(dialog, &QObject::destroyed,
+            this, [this] { poseDialog_ = nullptr; });
+    poseDialog_ = dialog;
     dialog->show();
     dialog->raise();
     dialog->activateWindow();
@@ -488,20 +556,24 @@ void MainWindow::onExportParameters()
                              tr("请先完成一次成功的相机标定。"));
         return;
     }
-    if (lastResult_.sourceDirectory.isEmpty()) {
-        QMessageBox::warning(this, tr("导出相机参数"),
-                             tr("无法确定标定图片所在目录。"));
+
+    const QString defaultName =
+        QDir(lastResult_.sourceDirectory.isEmpty()
+                 ? QStandardPaths::writableLocation(
+                       QStandardPaths::HomeLocation)
+                 : lastResult_.sourceDirectory)
+            .filePath(QStringLiteral("camera_parameters.yaml"));
+    const QString outputPath = QFileDialog::getSaveFileName(
+        this, tr("导出相机参数"), defaultName,
+        tr("YAML 文件 (*.yaml *.yml)"));
+    if (outputPath.isEmpty()) {
         return;
     }
 
-    const QString outputPath =
-        QDir(lastResult_.sourceDirectory)
-            .filePath(QStringLiteral("camera_parameters.yaml"));
     QString error;
     if (!calibrator_.exportParameters(outputPath, lastResult_, &error)) {
-        QMessageBox::warning(
-            this, tr("导出相机参数"),
-            tr("导出失败：%1").arg(error));
+        QMessageBox::warning(this, tr("导出相机参数"),
+                             tr("导出失败：%1").arg(error));
         return;
     }
 
@@ -514,10 +586,8 @@ void MainWindow::onClearAll()
 {
     imageList_->clear();
     currentPixmap_ = {};
-    lastResult_ = {};
     imageDisplay_->clear();
-    statusRmsError_->setText(tr("RMS: --"));
-    updateUiState();
+    invalidateCalibrationResult();
 }
 
 void MainWindow::onImageSelectionChanged()
@@ -537,31 +607,38 @@ void MainWindow::onImageSelectionChanged()
 void MainWindow::onCameraModelChanged()
 {
     const bool isFisheye =
-        currentOptions().cameraModel == CameraModel::Fisheye;
+        cameraModelCombo_->currentData().toInt()
+        == static_cast<int>(CameraModel::Fisheye);
     skewCheck_->setVisible(isFisheye);
     tangentialCheck_->setVisible(!isFisheye);
     radialCoeffSpin_->setRange(2, isFisheye ? 4 : 3);
     radialCoeffSpin_->setValue(isFisheye ? 4 : 3);
-    onDisplayModeChanged();
+    onCalibrationOptionsChanged();
 }
 
 void MainWindow::onBoardTypeChanged()
 {
     const bool isCharuco =
-        currentOptions().boardType == CalibrationBoardType::Charuco;
+        boardTypeCombo_->currentData().toInt()
+        == static_cast<int>(CalibrationBoardType::Charuco);
     ui_->markerSizeLabel->setVisible(isCharuco);
     markerSizeSpin_->setVisible(isCharuco);
     ui_->dictionaryLabel->setVisible(isCharuco);
     dictionaryCombo_->setVisible(isCharuco);
     ui_->methodLabel->setVisible(!isCharuco);
     methodCombo_->setVisible(!isCharuco);
+    onCalibrationOptionsChanged();
+}
+
+void MainWindow::onCalibrationOptionsChanged()
+{
+    invalidateCalibrationResult();
     onDisplayModeChanged();
 }
 
 void MainWindow::onDisplayModeChanged()
 {
-    // 标定板参数或显示模式变化后，重新检测并绘制当前图片。
-    onImageSelectionChanged();
+    debounceTimer_->start();
 }
 
 void MainWindow::loadImages(const QStringList& files)
@@ -575,28 +652,50 @@ void MainWindow::loadImages(const QStringList& files)
         }
     }
 
+    int added = 0;
+    int duplicates = 0;
+    int failures = 0;
     for (const QString& file : files) {
         if (loaded.contains(file)) {
+            ++duplicates;
             continue;
         }
         loaded.insert(file);
 
         QImageReader reader(file);
         reader.setAutoTransform(true);
-        const QImage image = reader.read();
-        if (image.isNull()) {
+        const QSize decodedSize = reader.size().scaled(
+            kThumbnailSize, kThumbnailSize, Qt::KeepAspectRatio);
+        if (decodedSize.isValid()) {
+            reader.setScaledSize(decodedSize);
+        }
+        const QImage decoded = reader.read();
+        if (decoded.isNull()) {
+            ++failures;
             continue;
         }
 
+        const QImage thumb = decoded.scaled(
+            kThumbnailSize, kThumbnailSize, Qt::KeepAspectRatio,
+            Qt::SmoothTransformation);
         auto* item = new QListWidgetItem(
-            QIcon(QPixmap::fromImage(image)), QFileInfo(file).fileName(),
-            imageList_);
+            QIcon(QPixmap::fromImage(thumb)), QFileInfo(file).fileName());
         item->setData(kRoleFilePath, file);
         item->setToolTip(file);
         imageList_->addItem(item);
+        ++added;
     }
 
-    updateUiState();
+    if (failures > 0) {
+        statusBar()->showMessage(
+            tr("%1 张图片加载失败").arg(failures), 5000);
+    }
+
+    if (added > 0) {
+        invalidateCalibrationResult();
+    } else {
+        updateUiState();
+    }
 }
 
 void MainWindow::showImage(const QString& filePath, bool* found)
@@ -656,7 +755,8 @@ void MainWindow::fitImageToView()
                       : tr("添加图片或文件夹以开始标定"));
         return;
     }
-    const QSize area = imageScroll_->viewport()->size() - QSize(20, 20);
+    const QSize area =
+        (imageScroll_->viewport()->size() - QSize(20, 20)).expandedTo({1, 1});
     imageDisplay_->setPixmap(
         currentPixmap_.scaled(area, Qt::KeepAspectRatio,
                               Qt::SmoothTransformation));

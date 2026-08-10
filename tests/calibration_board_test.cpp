@@ -116,6 +116,9 @@ int main(int argc, char* argv[])
     const CalibrationResult result = calibrator.calibrate(files, charuco);
     if (!result.success || result.imagesUsed < 30
         || !std::isfinite(result.rmsError)
+        || !result.report.contains(QStringLiteral("ChArUco"))
+        || (result.qualityWarning
+            && !result.report.contains(QStringLiteral("警告")))
         || result.poses.size() != static_cast<size_t>(result.imagesUsed)) {
         qCritical().noquote()
             << "ChArUco 数据集标定失败：" << result.imagesUsed
@@ -125,6 +128,11 @@ int main(int argc, char* argv[])
     for (const CalibrationPose& pose : result.poses) {
         if (pose.imagePath.isEmpty()) {
             qCritical() << "标定结果中的位姿缺少对应图片";
+            return EXIT_FAILURE;
+        }
+        if (!std::isfinite(pose.reprojectionError)
+            || pose.reprojectionError < 0.0) {
+            qCritical() << "标定结果包含无效的单图重投影误差";
             return EXIT_FAILURE;
         }
         for (int axis = 0; axis < 3; ++axis) {
@@ -164,6 +172,7 @@ int main(int argc, char* argv[])
     cv::String cameraModel;
     cv::String boardType;
     const cv::FileNode exportedPoses = exported["poses"];
+    double firstPoseError = 0.0;
     exported["camera_matrix"] >> cameraMatrix;
     exported["distortion_coefficients"] >> distortion;
     exported["image_width"] >> imageWidth;
@@ -172,6 +181,7 @@ int main(int argc, char* argv[])
     exported["board_rows"] >> boardRows;
     exported["camera_model"] >> cameraModel;
     exported["board_type"] >> boardType;
+    exportedPoses[0]["reprojection_error"] >> firstPoseError;
     if (imageWidth != result.imageSize.width()
         || imageHeight != result.imageSize.height()
         || boardColumns != charuco.boardSize.width()
@@ -180,6 +190,8 @@ int main(int argc, char* argv[])
         || boardType != "charuco"
         || !exportedPoses.isSeq()
         || exportedPoses.size() != result.poses.size()
+        || std::abs(firstPoseError - result.poses.front().reprojectionError)
+               > 1.0e-12
         || cv::norm(cameraMatrix, result.cameraMatrix, cv::NORM_INF) > 1.0e-12
         || cv::norm(distortion, result.distCoeffs, cv::NORM_INF) > 1.0e-12) {
         qCritical() << "导出的 YAML 内容与标定结果不一致";
@@ -200,6 +212,13 @@ int main(int argc, char* argv[])
             << "鱼眼模型标定失败：" << fisheyeResult.rmsError
             << fisheyeResult.report;
         return EXIT_FAILURE;
+    }
+    for (const CalibrationPose& pose : fisheyeResult.poses) {
+        if (!std::isfinite(pose.reprojectionError)
+            || pose.reprojectionError < 0.0) {
+            qCritical() << "鱼眼标定结果包含无效的单图重投影误差";
+            return EXIT_FAILURE;
+        }
     }
     found = false;
     if (calibrator.previewImage(

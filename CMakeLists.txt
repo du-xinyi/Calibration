@@ -96,22 +96,32 @@ add_compile_options(
     -Wpedantic
 )
 
-add_executable(Calibration
-    src/main.cpp
+add_library(CalibrationCore STATIC
+    src/calibration.cpp
+)
+target_include_directories(CalibrationCore PUBLIC src)
+target_link_libraries(CalibrationCore PUBLIC Qt6::Gui ${OpenCV_LIBS})
+
+add_library(CalibrationUi STATIC
     src/mainwindow.cpp
     src/mainwindow.ui
     src/pose_result_dialog.cpp
     src/pose_result_dialog.ui
-    src/calibration.cpp
 )
-
-target_link_libraries(Calibration PRIVATE Qt6::Widgets Qt6::Concurrent ${OpenCV_LIBS})
-target_include_directories(Calibration PRIVATE src)
+target_include_directories(CalibrationUi PUBLIC src)
+target_link_libraries(CalibrationUi PUBLIC
+    CalibrationCore
+    Qt6::Widgets
+    Qt6::Concurrent
+)
 
 # 将项目源码目录作为编译期常量传入，作为图片对话框的默认起始路径。
-target_compile_definitions(Calibration PRIVATE
+target_compile_definitions(CalibrationUi PRIVATE
     PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
+
+add_executable(Calibration src/main.cpp)
+target_link_libraries(Calibration PRIVATE CalibrationUi)
 
 set_target_properties(Calibration PROPERTIES
     WIN32_EXECUTABLE OFF
@@ -123,23 +133,15 @@ include(CTest)
 if(BUILD_TESTING)
     add_executable(CalibrationCompletionTest
         tests/calibration_completion_test.cpp
-        src/mainwindow.cpp
-        src/mainwindow.ui
-        src/pose_result_dialog.cpp
-        src/pose_result_dialog.ui
-        src/calibration.cpp
     )
-    target_include_directories(CalibrationCompletionTest PRIVATE src)
     target_link_libraries(CalibrationCompletionTest PRIVATE
-        Qt6::Widgets
-        Qt6::Concurrent
-        ${OpenCV_LIBS}
+        CalibrationUi
     )
 
     add_test(
         NAME calibration_completion_does_not_crash
         COMMAND CalibrationCompletionTest
-                "${CMAKE_CURRENT_SOURCE_DIR}/arx_camera0"
+                "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
     )
     set_tests_properties(calibration_completion_does_not_crash PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -148,18 +150,15 @@ if(BUILD_TESTING)
 
     add_executable(CalibrationBoardTest
         tests/calibration_board_test.cpp
-        src/calibration.cpp
     )
-    target_include_directories(CalibrationBoardTest PRIVATE src)
     target_link_libraries(CalibrationBoardTest PRIVATE
-        Qt6::Gui
-        ${OpenCV_LIBS}
+        CalibrationCore
     )
 
     add_test(
         NAME calibration_board_types_and_square_counts
         COMMAND CalibrationBoardTest
-                "${CMAKE_CURRENT_SOURCE_DIR}/arx_camera0"
+                "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
     )
     set_tests_properties(calibration_board_types_and_square_counts PROPERTIES
         TIMEOUT 30

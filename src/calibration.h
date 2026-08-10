@@ -74,6 +74,7 @@ struct CalibrationPose {
     QString imagePath;
     cv::Vec3d rotationVector;
     cv::Vec3d translationVector;
+    double reprojectionError = 0.0; ///< 本张图片的重投影 RMS 误差（像素）
 };
 
 /**
@@ -81,6 +82,7 @@ struct CalibrationPose {
  */
 struct CalibrationResult {
     bool success = false;
+    bool qualityWarning = false;     ///< 整体或单图重投影误差超过建议阈值
     double rmsError = 0.0;          ///< 重投影 RMS 误差（像素）
     cv::Mat cameraMatrix;           ///< 3×3 相机内参
     cv::Mat distCoeffs;             ///< 畸变系数向量
@@ -149,4 +151,12 @@ public:
     bool exportParameters(const QString& filePath,
                           const CalibrationResult& result,
                           QString* error = nullptr) const;
+
+private:
+    QString previewCacheFilePath_;
+    qint64 previewCacheFileSize_ = -1;
+    qint64 previewCacheModifiedMs_ = -1;
+    CalibrationOptions previewCacheOptions_;
+    cv::Mat previewCacheAnnotated_;
+    bool previewCacheFound_ = false;
 };
