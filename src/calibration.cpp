@@ -679,6 +679,13 @@ bool Calibrator::exportParameters(const QString& filePath,
         }
         return false;
     }
+    if (result.cameraMatrix.rows != 3 || result.cameraMatrix.cols != 3
+        || result.cameraMatrix.channels() != 1) {
+        if (error) {
+            *error = QObject::tr("相机内参矩阵必须是 3×3 单通道矩阵。");
+        }
+        return false;
+    }
 
     try {
         cv::FileStorage storage(
@@ -693,7 +700,7 @@ bool Calibrator::exportParameters(const QString& filePath,
         }
 
         const CalibrationOptions& opts = result.options;
-        storage << "format_version" << 1;
+        storage << "format_version" << 2;
         storage << "camera_model" << cameraModelName(opts.cameraModel);
         storage << "image_width" << result.imageSize.width();
         storage << "image_height" << result.imageSize.height();
@@ -722,7 +729,18 @@ bool Calibrator::exportParameters(const QString& filePath,
                 << static_cast<int>(result.qualityWarning);
         storage << "images_used" << result.imagesUsed;
         storage << "images_total" << result.imagesTotal;
-        storage << "camera_matrix" << result.cameraMatrix;
+        cv::Mat cameraMatrix;
+        result.cameraMatrix.convertTo(cameraMatrix, CV_64F);
+        storage.startWriteStruct("camera_matrix", cv::FileNode::SEQ);
+        for (int row = 0; row < 3; ++row) {
+            storage.startWriteStruct(
+                "", cv::FileNode::SEQ | cv::FileNode::FLOW);
+            for (int col = 0; col < 3; ++col) {
+                storage << cameraMatrix.at<double>(row, col);
+            }
+            storage.endWriteStruct();
+        }
+        storage.endWriteStruct();
         storage << "distortion_coefficients" << result.distCoeffs;
         storage << "poses" << "[";
         for (const CalibrationPose& pose : result.poses) {

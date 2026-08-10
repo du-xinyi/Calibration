@@ -149,6 +149,18 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
+    CalibrationResult invalidMatrixResult = result;
+    invalidMatrixResult.cameraMatrix = cv::Mat::eye(2, 2, CV_64F);
+    const QString invalidMatrixPath =
+        tempDir.filePath(QStringLiteral("invalid_matrix.yaml"));
+    exportError.clear();
+    if (calibrator.exportParameters(
+            invalidMatrixPath, invalidMatrixResult, &exportError)
+        || exportError.isEmpty() || QFileInfo::exists(invalidMatrixPath)) {
+        qCritical() << "非 3×3 相机矩阵不应被导出";
+        return EXIT_FAILURE;
+    }
+
     exportError.clear();
     const QString exportPath =
         tempDir.filePath(QStringLiteral("camera_parameters.yaml"));
@@ -169,12 +181,30 @@ int main(int argc, char* argv[])
     int imageHeight = 0;
     int boardColumns = 0;
     int boardRows = 0;
+    int formatVersion = 0;
     cv::String cameraModel;
     cv::String boardType;
+    const cv::FileNode exportedCameraMatrix = exported["camera_matrix"];
     const cv::FileNode exportedPoses = exported["poses"];
     double firstPoseError = 0.0;
-    exported["camera_matrix"] >> cameraMatrix;
+    if (!exportedCameraMatrix.isSeq()
+        || exportedCameraMatrix.size() != 3) {
+        qCritical() << "导出的 camera_matrix 不是 3×3 数组";
+        return EXIT_FAILURE;
+    }
+    cameraMatrix = cv::Mat::zeros(3, 3, CV_64F);
+    for (int row = 0; row < 3; ++row) {
+        const cv::FileNode exportedRow = exportedCameraMatrix[row];
+        if (!exportedRow.isSeq() || exportedRow.size() != 3) {
+            qCritical() << "导出的 camera_matrix 行列数不正确";
+            return EXIT_FAILURE;
+        }
+        for (int col = 0; col < 3; ++col) {
+            exportedRow[col] >> cameraMatrix.at<double>(row, col);
+        }
+    }
     exported["distortion_coefficients"] >> distortion;
+    exported["format_version"] >> formatVersion;
     exported["image_width"] >> imageWidth;
     exported["image_height"] >> imageHeight;
     exported["board_columns"] >> boardColumns;
@@ -182,7 +212,8 @@ int main(int argc, char* argv[])
     exported["camera_model"] >> cameraModel;
     exported["board_type"] >> boardType;
     exportedPoses[0]["reprojection_error"] >> firstPoseError;
-    if (imageWidth != result.imageSize.width()
+    if (formatVersion != 2
+        || imageWidth != result.imageSize.width()
         || imageHeight != result.imageSize.height()
         || boardColumns != charuco.boardSize.width()
         || boardRows != charuco.boardSize.height()
