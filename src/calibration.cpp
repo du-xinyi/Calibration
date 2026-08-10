@@ -15,7 +15,10 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <iomanip>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -23,6 +26,80 @@ namespace {
 
 constexpr double kOverallRmsWarningThreshold = 1.0;
 constexpr double kPerViewRmsWarningThreshold = 2.0;
+
+/// 将文件名编码成 YAML 双引号字符串，避免特殊字符破坏行内位姿映射。
+std::string yamlQuotedString(const QString& value)
+{
+    const QByteArray utf8 = value.toUtf8();
+    constexpr char kHexDigits[] = "0123456789ABCDEF";
+    std::string quoted;
+    quoted.reserve(static_cast<size_t>(utf8.size()) + 2);
+    quoted.push_back('"');
+    for (const char byte : utf8) {
+        const auto ch = static_cast<unsigned char>(byte);
+        switch (ch) {
+        case '"':
+            quoted += "\\\"";
+            break;
+        case '\\':
+            quoted += "\\\\";
+            break;
+        case '\b':
+            quoted += "\\b";
+            break;
+        case '\f':
+            quoted += "\\f";
+            break;
+        case '\n':
+            quoted += "\\n";
+            break;
+        case '\r':
+            quoted += "\\r";
+            break;
+        case '\t':
+            quoted += "\\t";
+            break;
+        default:
+            if (ch < 0x20) {
+                quoted += "\\x";
+                quoted.push_back(kHexDigits[ch >> 4]);
+                quoted.push_back(kHexDigits[ch & 0x0F]);
+            } else {
+                quoted.push_back(static_cast<char>(ch));
+            }
+            break;
+        }
+    }
+    quoted.push_back('"');
+    return quoted;
+}
+
+/// 将逐图片位姿写成紧凑的一行一图格式，减少大批量标定时的文件长度。
+std::string compactPosesYaml(const std::vector<CalibrationPose>& poses)
+{
+    std::ostringstream yaml;
+    yaml.imbue(std::locale::classic());
+    yaml << std::setprecision(15)
+         << "\n# Per-image poses (rotation: Rodrigues vector, translation: mm)\n";
+    if (poses.empty()) {
+        yaml << "poses: []\n";
+        return yaml.str();
+    }
+
+    yaml << "poses:\n";
+    for (const CalibrationPose& pose : poses) {
+        yaml << "  - { image: "
+             << yamlQuotedString(QFileInfo(pose.imagePath).fileName())
+             << ", reprojection_error: " << pose.reprojectionError
+             << ", rotation_vector: [ " << pose.rotationVector[0]
+             << ", " << pose.rotationVector[1]
+             << ", " << pose.rotationVector[2]
+             << " ], translation_vector: [ " << pose.translationVector[0]
+             << ", " << pose.translationVector[1]
+             << ", " << pose.translationVector[2] << " ] }\n";
+    }
+    return yaml.str();
+}
 
 /// 检测棋盘格角点，按方法选择不同的 OpenCV 实现。
 bool detectCorners(const cv::Mat& gray, const cv::Size& pattern,
@@ -694,6 +771,7 @@ bool Calibrator::exportParameters(const QString& filePath,
 
         const CalibrationOptions& opts = result.options;
         storage << "format_version" << 1;
+        storage.writeComment("Calibration setup", false);
         storage << "camera_model" << cameraModelName(opts.cameraModel);
         storage << "image_width" << result.imageSize.width();
         storage << "image_height" << result.imageSize.height();
@@ -717,32 +795,18 @@ bool Calibrator::exportParameters(const QString& filePath,
                     << static_cast<int>(opts.tangential);
         }
         storage << "radial_coefficients" << opts.radialCoeffs;
+        storage.writeComment("Calibration quality", false);
         storage << "rms_reprojection_error" << result.rmsError;
         storage << "quality_warning"
                 << static_cast<int>(result.qualityWarning);
         storage << "images_used" << result.imagesUsed;
         storage << "images_total" << result.imagesTotal;
+        storage.writeComment("Camera parameters", false);
         storage << "camera_matrix" << result.cameraMatrix;
         storage << "distortion_coefficients" << result.distCoeffs;
-        storage << "poses" << "[";
-        for (const CalibrationPose& pose : result.poses) {
-            storage << "{"
-                    << "image"
-                    << QFileInfo(pose.imagePath).fileName().toStdString()
-                    << "rotation_vector" << "["
-                    << pose.rotationVector[0]
-                    << pose.rotationVector[1]
-                    << pose.rotationVector[2] << "]"
-                    << "translation_vector" << "["
-                    << pose.translationVector[0]
-                    << pose.translationVector[1]
-                    << pose.translationVector[2] << "]"
-                    << "reprojection_error" << pose.reprojectionError
-                    << "}";
-        }
-        storage << "]";
 
-        const cv::String yaml = storage.releaseAndGetString();
+        cv::String yaml = storage.releaseAndGetString();
+        yaml += compactPosesYaml(result.poses);
         QSaveFile output(filePath);
         if (!output.open(QIODevice::WriteOnly)) {
             if (error) {
