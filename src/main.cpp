@@ -5,7 +5,7 @@
 int main(int argc, char* argv[])
 {
     QApplication app(argc, argv);
-    QApplication::setApplicationName("Calibration");
+    QApplication::setApplicationName("camera-calibrator");
 
     MainWindow window;
     window.show();

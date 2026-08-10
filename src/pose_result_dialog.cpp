@@ -271,7 +271,7 @@ void PoseVisualizationWidget::rebuildGeometry()
     appendBoard(geometry_->lines, geometry_->labels,
                 cv::Matx33d::eye(), {}, boardWidth, boardHeight,
                 QColor(45, 50, 60), 2.0,
-                QStringLiteral("Calibration Board"));
+                QStringLiteral("camera-calibrator Board"));
     for (size_t index = 0; index < poseCount; ++index) {
         const CalibrationPose& pose = result_.poses[index];
         const cv::Matx33d boardToCamera =
