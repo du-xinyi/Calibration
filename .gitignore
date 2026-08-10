@@ -19,7 +19,3 @@ build/
 *.pro.user
 *.pro.user.*
 compile_commands.json
-
-# Local calibration datasets and generated parameters
-/image/
-/image (副本)/
