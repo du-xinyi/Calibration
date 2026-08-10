@@ -46,6 +46,7 @@ AlgorithmComparisonDialog::AlgorithmComparisonDialog(
     setObjectName(QStringLiteral("AlgorithmComparisonDialog"));
     setWindowTitle(tr("算法结果对比"));
     resize(900, 360);
+    // 成功结果优先，再按拟合误差升序排列；stable_sort 保留并列项的候选顺序
     std::stable_sort(results.begin(), results.end(),
                      [](const CalibrationResult& lhs,
                         const CalibrationResult& rhs) {

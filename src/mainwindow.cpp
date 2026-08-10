@@ -50,13 +50,14 @@
 namespace {
 
 constexpr int kThumbnailSize = 96;
-constexpr int kRoleFilePath = Qt::UserRole + 1;
-constexpr int kRoleImageHash = Qt::UserRole + 2;
-constexpr int kRoleQualityWarnings = Qt::UserRole + 3;
+constexpr int kRoleFilePath = Qt::UserRole + 1;        ///< 列表项对应的原图路径
+constexpr int kRoleImageHash = Qt::UserRole + 2;       ///< 质量预检生成的差值哈希
+constexpr int kRoleQualityWarnings = Qt::UserRole + 3; ///< 列表项的质量提示集合
 
 QIcon themedIcon(QStyle* style, QStyle::StandardPixmap fallback,
                  const QStringList& names)
 {
+    // 优先跟随桌面图标主题；无可用主题图标时回退到 Qt 内置资源
     for (const QString& name : names) {
         const QIcon icon = QIcon::fromTheme(name);
         if (!icon.isNull()) {
@@ -140,6 +141,7 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    // 先断开 finished 回调再等待，避免析构期间重新进入窗口状态更新逻辑
     if (calibWatcher_ != nullptr) {
         disconnect(calibWatcher_, &QFutureWatcher<CalibrationResult>::finished,
                    this, nullptr);
@@ -148,6 +150,7 @@ MainWindow::~MainWindow()
             calibWatcher_->waitForFinished();
         }
     }
+    // 辅助任务与主标定任务共享窗口成员，窗口释放前必须全部完成
     auxiliaryCanceled_.store(true);
     if (comparisonWatcher_ != nullptr && comparisonWatcher_->isRunning()) {
         disconnect(comparisonWatcher_, nullptr, this, nullptr);
@@ -570,6 +573,7 @@ void MainWindow::onImportParameters()
     statusRmsError_->setText(
         tr("RMS: %1 px（导入）").arg(result->rmsError, 0, 'f', 3));
 
+    // 导入参数可以保留当前图片列表，但仅对相同分辨率的图片启用去畸变
     QStringList mismatches;
     for (const QString& file : collectFiles()) {
         QImageReader reader(file);
@@ -607,6 +611,7 @@ void MainWindow::onCompareAlgorithms()
         return;
     }
 
+    // 保持标定板物理参数不变，只展开可比较的相机模型与检测器组合
     const CalibrationOptions base = currentOptions();
     std::vector<CalibrationOptions> candidates;
     for (CameraModel model : {CameraModel::Pinhole, CameraModel::Fisheye}) {
@@ -635,6 +640,7 @@ void MainWindow::onCompareAlgorithms()
     connect(auxiliaryProgressDialog_, &QProgressDialog::canceled, this,
             [this] { auxiliaryCanceled_.store(true); });
 
+    // watcher 归属 GUI 线程；finished 回调统一回收进度框并恢复界面状态
     comparisonWatcher_ =
         new QFutureWatcher<std::vector<CalibrationResult>>(this);
     connect(comparisonWatcher_,
@@ -659,6 +665,7 @@ void MainWindow::onCompareAlgorithms()
                 dialog->show();
             });
     Calibrator* worker = &calibrator_;
+    // 候选算法串行运行，避免多个 OpenCV 求解同时争用 CPU 并简化取消语义
     comparisonWatcher_->setFuture(QtConcurrent::run(
         [this, worker, files, candidates] {
             std::vector<CalibrationResult> results;
@@ -750,6 +757,7 @@ void MainWindow::startCalibration(
     };
     auto cancelCb = [this] { return calibCanceled_.load(); };
 
+    // 所有后台任务状态都在 finished 回调中一次性收尾，防止界面长期保持 busy
     calibWatcher_ = new QFutureWatcher<CalibrationResult>(this);
     connect(calibWatcher_, &QFutureWatcher<CalibrationResult>::finished, this,
             [this, files, opts, comparison] {
@@ -762,6 +770,7 @@ void MainWindow::startCalibration(
                     progressDialog_->deleteLater();
                     progressDialog_ = nullptr;
                 }
+                // 异步期间输入若发生变化，旧结果不得覆盖当前界面状态
                 if (!sameCalibrationOptions(opts, currentOptions())
                     || files != collectFiles()) {
                     result = {};
@@ -792,7 +801,8 @@ void MainWindow::startCalibration(
                 presentResult(result);
             });
 
-    Calibrator* worker = &calibrator_;  // 方法无共享可变状态，可跨线程调用
+    // calibrate 不访问预览缓存，后台调用不会与 GUI 预览共享可变状态
+    Calibrator* worker = &calibrator_;
     calibWatcher_->setFuture(QtConcurrent::run(
         [worker, files, opts, progressCb, cancelCb]() {
             return worker->calibrate(files, opts, progressCb, cancelCb);
@@ -874,6 +884,7 @@ void MainWindow::onExcludeImagesAndRecalibrate(
         return;
     }
 
+    // 逆序删除可保持尚未处理的列表行号稳定
     for (int row = imageList_->count() - 1; row >= 0; --row) {
         const QListWidgetItem* item = imageList_->item(row);
         if (item != nullptr
@@ -951,6 +962,7 @@ void MainWindow::onExportUndistortedImages()
             [this] { auxiliaryCanceled_.store(true); });
 
     const CalibrationResult calibration = lastResult_;
+    // 标定结果按值捕获，保证后台任务使用启动时的一致参数快照
     batchWatcher_ = new QFutureWatcher<BatchUndistortSummary>(this);
     connect(batchWatcher_, &QFutureWatcher<BatchUndistortSummary>::finished,
             this, [this, outputDirectory] {
@@ -996,6 +1008,7 @@ void MainWindow::onExportUndistortedImages()
                 if (suffix.isEmpty()) {
                     suffix = QStringLiteral("png");
                 }
+                // 同名输入可能来自不同目录，为每个输出生成本批次内唯一的文件名
                 QString outputName = base + QStringLiteral("_undistorted.") + suffix;
                 int duplicateIndex = 2;
                 while (outputNames.contains(outputName)) {
@@ -1108,6 +1121,7 @@ void MainWindow::loadImages(const QStringList& files)
     int duplicates = 0;
     int failures = 0;
     int qualityWarnings = 0;
+    // 路径去重之外再比较感知哈希，用于提示内容高度相似但文件名不同的图片
     QSet<quint64> loadedHashes;
     for (int i = 0; i < imageList_->count(); ++i) {
         if (const QListWidgetItem* item = imageList_->item(i)) {
@@ -1142,6 +1156,7 @@ void MainWindow::loadImages(const QStringList& files)
         item->setData(kRoleFilePath, file);
         const ImageQualityResult quality = analyzeImageQuality(file);
         QStringList warnings = quality.warnings;
+        // 汉明距离不超过 3 视为高度相似；这里只提示，不阻止用户继续标定
         const bool similarImage = std::any_of(
             loadedHashes.cbegin(), loadedHashes.cend(),
             [&quality](quint64 existingHash) {

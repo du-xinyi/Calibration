@@ -16,11 +16,13 @@ ImageQualityResult analyzeImageQuality(const QString& filePath)
         return result;
     }
     result.readable = true;
+    // 质量预检只需要低频统计特征，限制长边可显著降低批量加载开销
     if (image.cols > 640 || image.rows > 640) {
         const double scale = 640.0 / std::max(image.cols, image.rows);
         cv::resize(image, image, {}, scale, scale, cv::INTER_AREA);
     }
 
+    // 拉普拉斯响应方差作为清晰度启发式指标，不参与标定结果判定
     cv::Scalar mean;
     cv::Scalar deviation;
     cv::meanStdDev(image, mean, deviation);
@@ -30,6 +32,7 @@ ImageQualityResult analyzeImageQuality(const QString& filePath)
     cv::meanStdDev(laplacian, mean, deviation);
     result.sharpness = deviation[0] * deviation[0];
 
+    // 同时统计近黑与近白像素，提示大面积欠曝、过曝或动态范围裁切
     cv::Mat clipped = (image <= 5) | (image >= 250);
     result.clippedRatio = static_cast<double>(cv::countNonZero(clipped))
                           / static_cast<double>(image.total());
@@ -45,6 +48,7 @@ ImageQualityResult analyzeImageQuality(const QString& filePath)
         result.warnings << QObject::tr("亮暗区域裁切较多");
     }
 
+    // 9×8 差值哈希编码相邻像素的亮度趋势，用于快速提示近似画面
     cv::Mat hashImage;
     cv::resize(image, hashImage, cv::Size(9, 8), 0.0, 0.0, cv::INTER_AREA);
     quint64 hash = 0;

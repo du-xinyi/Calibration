@@ -11,8 +11,8 @@
 #include <optional>
 #include <vector>
 
-inline constexpr double kOverallRmsWarningThresholdPx = 1.0; ///< 整体 RMS 告警阈值
-inline constexpr double kPerViewRmsWarningThresholdPx = 2.0; ///< 单图 RMS 告警阈值
+inline constexpr double kOverallRmsWarningThresholdPx = 1.0; ///< 整体 RMS 告警阈值，单位为像素
+inline constexpr double kPerViewRmsWarningThresholdPx = 2.0; ///< 单图 RMS 告警阈值，单位为像素
 
 /**
  * @brief 标定板类型。
@@ -45,24 +45,24 @@ enum class CalibrationMethod {
  * @brief ChArUco 使用的预定义 ArUco 字典。
  */
 enum class ArucoDictionary {
-    Dict4x4_50,
-    Dict5x5_100,
-    Dict5x5_250,
-    Dict6x6_250,
-    Original,
+    Dict4x4_50,  ///< 包含 50 个 4×4 标记的字典
+    Dict5x5_100, ///< 包含 100 个 5×5 标记的字典
+    Dict5x5_250, ///< 包含 250 个 5×5 标记的字典
+    Dict6x6_250, ///< 包含 250 个 6×6 标记的字典
+    Original,    ///< OpenCV 原始 ArUco 字典
 };
 
 /**
  * @brief 标定输入参数。
  */
 struct CalibrationOptions {
-    CameraModel cameraModel = CameraModel::Pinhole;
-    CalibrationBoardType boardType = CalibrationBoardType::Charuco;
+    CameraModel cameraModel = CameraModel::Pinhole; ///< 求解和去畸变采用的相机模型
+    CalibrationBoardType boardType = CalibrationBoardType::Charuco; ///< 输入图片中的标定板类型
     QSize boardSize{14, 9};         ///< 标定板方格数（列 × 行）
     double squareSize = 20.0;       ///< 单个方格物理边长（毫米）
     double markerSize = 15.0;       ///< ChArUco 标记边长（毫米）
-    ArucoDictionary dictionary = ArucoDictionary::Dict5x5_100;
-    CalibrationMethod method = CalibrationMethod::Classic;
+    ArucoDictionary dictionary = ArucoDictionary::Dict5x5_100; ///< ChArUco 标记字典
+    CalibrationMethod method = CalibrationMethod::Classic; ///< 普通棋盘格的角点检测方法
     bool skew = false;              ///< 鱼眼模型是否估计斜率项
     bool tangential = true;         ///< 针孔模型是否估计切向畸变
     int radialCoeffs = 3;           ///< 针孔支持 2-3 个，鱼眼支持 2-4 个
@@ -75,9 +75,9 @@ struct CalibrationOptions {
  * 通过 Rodrigues 公式得到，平移单位与方格尺寸一致（当前为毫米）。
  */
 struct CalibrationPose {
-    QString imagePath;
-    cv::Vec3d rotationVector;
-    cv::Vec3d translationVector;
+    QString imagePath;              ///< 产生此外参的图片路径
+    cv::Vec3d rotationVector;       ///< 标定板到相机坐标系的 Rodrigues 旋转向量
+    cv::Vec3d translationVector;    ///< 标定板到相机坐标系的平移向量
     double reprojectionError = 0.0; ///< 本张图片的重投影 RMS 误差（像素）
 };
 
@@ -85,7 +85,7 @@ struct CalibrationPose {
  * @brief 标定结果。
  */
 struct CalibrationResult {
-    bool success = false;
+    bool success = false;            ///< 内参与畸变参数是否通过有效性检查
     bool qualityWarning = false;     ///< 整体或单图重投影误差超过建议阈值
     double rmsError = 0.0;          ///< 重投影 RMS 误差（像素）
     cv::Mat cameraMatrix;           ///< 3×3 相机内参
@@ -95,7 +95,7 @@ struct CalibrationResult {
     QSize imageSize;                ///< 标定图像尺寸
     CalibrationOptions options;     ///< 本次标定使用的参数
     std::vector<CalibrationPose> poses; ///< 每张有效图片的外参
-    QString sourceDirectory;        ///< 本次标定图片所在目录
+    QString sourceDirectory;        ///< 参数导出对话框使用的默认目录
     QString report;                 ///< 人类可读的标定报告
 };
 
@@ -120,6 +120,7 @@ public:
      * @param calib 已有标定结果（用于去畸变预览，可为失败结果）
      * @param showUndistorted 是否显示去畸变后的图像
      * @param found 输出本次检测结果是否足以用于标定，可为 nullptr
+     *
      * @return 带角点标注的预览图；读图失败返回空 QImage
      */
     QImage previewImage(const QString& filePath,
@@ -137,6 +138,7 @@ public:
      * @param opts 标定参数
      * @param progress 每张图处理完的进度回调，可为空
      * @param isCanceled 取消谓词，可为空
+     *
      * @return 标定结果，含 RMS、内参与畸变系数
      */
     CalibrationResult calibrate(const QStringList& files,
@@ -150,6 +152,7 @@ public:
      * @param filePath 输出文件完整路径
      * @param result 成功的标定结果
      * @param error 失败原因，可为 nullptr
+     *
      * @return 写入并提交成功时返回 true
      */
     bool exportParameters(const QString& filePath,
@@ -161,6 +164,11 @@ public:
      *
      * 同时支持 3×3 嵌套数组和 `!!opencv-matrix` 形式的相机矩阵。
      * 读入数据会检查矩阵维度、有限性、焦距和模型对应的畸变系数数量。
+     *
+     * @param filePath 输入 YAML 文件路径
+     * @param error 失败原因，可为 nullptr
+     *
+     * @return 校验后的标定结果；读取或校验失败时返回 std::nullopt
      */
     std::optional<CalibrationResult> importParameters(
         const QString& filePath, QString* error = nullptr) const;
@@ -169,6 +177,13 @@ public:
      * @brief 使用给定标定结果去畸变并写出单张图片。
      *
      * 输入分辨率必须与标定分辨率完全一致，避免静默应用错误内参。
+     *
+     * @param inputPath 输入图片路径
+     * @param outputPath 去畸变图片的输出路径
+     * @param result 已通过校验的标定结果
+     * @param error 失败原因，可为 nullptr
+     *
+     * @return 图片成功写出时返回 true
      */
     bool undistortImageFile(const QString& inputPath,
                             const QString& outputPath,
@@ -176,10 +191,11 @@ public:
                             QString* error = nullptr) const;
 
 private:
-    QString previewCacheFilePath_;
-    qint64 previewCacheFileSize_ = -1;
-    qint64 previewCacheModifiedMs_ = -1;
-    CalibrationOptions previewCacheOptions_;
-    cv::Mat previewCacheAnnotated_;
-    bool previewCacheFound_ = false;
+    // === 单图预览缓存 ===
+    QString previewCacheFilePath_;       ///< 缓存所对应的图片路径
+    qint64 previewCacheFileSize_ = -1;   ///< 用于识别原文件变化的字节数
+    qint64 previewCacheModifiedMs_ = -1; ///< 用于识别原文件变化的修改时间
+    CalibrationOptions previewCacheOptions_; ///< 产生缓存时使用的检测参数
+    cv::Mat previewCacheAnnotated_;      ///< 已绘制角点但尚未去畸变的 BGR 图像
+    bool previewCacheFound_ = false;     ///< 缓存图像是否检测到可用角点
 };

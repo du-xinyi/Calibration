@@ -34,6 +34,7 @@ constexpr int kPoseIndexRole = Qt::UserRole;
 constexpr int kImagePathRole = Qt::UserRole + 1;
 constexpr int kRmsValueRole = Qt::UserRole + 2;
 
+/// 三维场景中的有色线段，绘制阶段再统一投影到屏幕坐标
 struct Line3d {
     cv::Vec3d start;
     cv::Vec3d end;
@@ -41,6 +42,7 @@ struct Line3d {
     qreal width = 1.0;
 };
 
+/// 锚定在三维位置上的文本标签
 struct Label3d {
     cv::Vec3d position;
     QString text;
@@ -54,6 +56,7 @@ cv::Matx33d rotationMatrix(const cv::Vec3d& rotationVector)
     return rotation;
 }
 
+/// 由偏航角和俯仰角构造的正交投影，不引入透视缩短
 struct ViewProjection {
     explicit ViewProjection(double yawDegrees, double pitchDegrees,
                             bool shouldFlipZ)
@@ -71,6 +74,7 @@ struct ViewProjection {
 
     QPointF project(const cv::Vec3d& point) const
     {
+        // Pattern-Centric 视图翻转 Z 轴，使屏幕方向符合标定板观察习惯
         const double z = flipZ ? -point[2] : point[2];
         const double rotatedX =
             cosineYaw * point[0] - sineYaw * point[1];
@@ -109,6 +113,7 @@ void appendBoard(std::vector<Line3d>& lines, std::vector<Label3d>& labels,
                  double width, double height, const QColor& color,
                  qreal lineWidth, const QString& label)
 {
+    // 标定板局部原点位于一个角点，四个角通过给定刚体变换进入场景坐标系
     const std::array<cv::Vec3d, 4> localCorners{
         cv::Vec3d{0.0, 0.0, 0.0},
         cv::Vec3d{width, 0.0, 0.0},
@@ -135,6 +140,7 @@ void appendCamera(std::vector<Line3d>& lines, std::vector<Label3d>& labels,
                   const QColor& color, qreal lineWidth,
                   const QString& label)
 {
+    // 用连接光心与虚拟像平面的视锥线框表达相机朝向
     const std::array<cv::Vec3d, 4> imagePlane{
         cv::Vec3d{-size, -0.7 * size, 1.6 * size},
         cv::Vec3d{size, -0.7 * size, 1.6 * size},
@@ -232,6 +238,7 @@ void PoseVisualizationWidget::rebuildGeometry()
         return;
     }
 
+    // 两种视图共享相同物理尺度，保证切换参考坐标系时大小关系不变
     const double boardWidth =
         result_.options.boardSize.width() * result_.options.squareSize;
     const double boardHeight =
@@ -248,6 +255,7 @@ void PoseVisualizationWidget::rebuildGeometry()
                referenceSize * 0.55, patternCentric);
 
     if (!patternCentric) {
+        // Camera-Centric 直接使用标定输出的 board-to-camera 变换绘制标定板
         appendCamera(geometry_->lines, geometry_->labels,
                      cv::Matx33d::eye(), {}, referenceSize * 0.08,
                      QColor(45, 50, 60), 2.0,
@@ -268,6 +276,7 @@ void PoseVisualizationWidget::rebuildGeometry()
         return;
     }
 
+    // Pattern-Centric 需要求 board-to-camera 的逆变换来获得相机位姿
     appendBoard(geometry_->lines, geometry_->labels,
                 cv::Matx33d::eye(), {}, boardWidth, boardHeight,
                 QColor(45, 50, 60), 2.0,
@@ -313,6 +322,7 @@ void PoseVisualizationWidget::paintEvent(QPaintEvent* event)
     const std::vector<Line3d>& lines = geometry_->lines;
     const std::vector<Label3d>& labels = geometry_->labels;
 
+    // 先投影全部线段端点得到自适应边界，再居中映射到控件可用区域
     double minX = std::numeric_limits<double>::max();
     double minY = std::numeric_limits<double>::max();
     double maxX = std::numeric_limits<double>::lowest();
@@ -329,6 +339,7 @@ void PoseVisualizationWidget::paintEvent(QPaintEvent* event)
         maxX = std::max(maxX, projected.x());
         maxY = std::max(maxY, projected.y());
     };
+    // 几何缓存保持物理坐标，用户旋转和缩放只需重做轻量投影与绘制
     for (const Line3d& line : lines) {
         includePoint(line.start);
         includePoint(line.end);
@@ -497,6 +508,7 @@ PoseResultDialog::~PoseResultDialog() = default;
 
 void PoseResultDialog::populatePoseTable(const CalibrationResult& result)
 {
+    // 表格按误差降序便于定位异常图，同时保存原始索引用于同步三维高亮
     std::vector<size_t> poseOrder(result.poses.size());
     std::iota(poseOrder.begin(), poseOrder.end(), 0U);
     std::stable_sort(

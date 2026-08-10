@@ -136,11 +136,13 @@ bool parseCameraMatrix(const cv::FileNode& node, cv::Mat& matrix)
         return false;
     }
     if (!node.isSeq()) {
+        // OpenCV 原生 !!opencv-matrix 会被 FileStorage 直接解码为 cv::Mat
         node >> matrix;
         matrix.convertTo(matrix, CV_64F);
         return matrix.rows == 3 && matrix.cols == 3
                && matrix.channels() == 1;
     }
+    // 本工具导出的嵌套数组形式需要逐元素读取，以兼容普通 YAML 解析器
     if (node.size() != 3) {
         return false;
     }
@@ -203,6 +205,7 @@ QString validateOptions(const CalibrationOptions& opts)
         if (!(opts.markerSize > 0.0 && opts.markerSize < opts.squareSize)) {
             return QObject::tr("ChArUco 标记尺寸必须大于 0 且小于方格尺寸。");
         }
+        // ChArUco 棋盘按黑格交错放置标记，向上取整得到所需字典容量
         const int requiredMarkers = (opts.boardSize.width()
                                      * opts.boardSize.height()
                                      + 1)
@@ -231,6 +234,7 @@ bool sameDetectionOptions(const CalibrationOptions& lhs,
 std::vector<cv::Point3f> chessboardObjectPoints(
     const CalibrationOptions& opts)
 {
+    // boardSize 表示方格数，而普通棋盘的可检测内角点每个方向少一个
     const cv::Size pattern(opts.boardSize.width() - 1,
                            opts.boardSize.height() - 1);
     std::vector<cv::Point3f> points;
@@ -258,6 +262,7 @@ bool hasNonCollinearPoints(const std::vector<cv::Point3f>& points)
     if (second == points.cend()) {
         return false;
     }
+    // 至少需要第三个点与基线形成非零二维叉积，才能稳定估计平面位姿
     const cv::Point3f direction = *second - first;
     return std::any_of(
         second + 1, points.cend(), [&first, &direction](const cv::Point3f& point) {
@@ -268,6 +273,7 @@ bool hasNonCollinearPoints(const std::vector<cv::Point3f>& points)
         });
 }
 
+/// 将不同标定板检测器的输出统一为标定求解所需的点对
 struct BoardDetection {
     std::vector<cv::Point2f> imagePoints;
     std::vector<cv::Point3f> objectPoints;
@@ -306,6 +312,7 @@ BoardDetection detectCharuco(const cv::Mat& gray,
     const std::vector<cv::Point3f> boardCorners =
         board.getChessboardCorners();
 
+    // 仅保留能映射到当前 Board 角点数组的 ID，防止异常检测结果越界
     std::vector<cv::Point2f> validImagePoints;
     std::vector<cv::Point3f> validObjectPoints;
     std::vector<int> validIds;
@@ -324,6 +331,7 @@ BoardDetection detectCharuco(const cv::Mat& gray,
     detection.imagePoints = std::move(validImagePoints);
     detection.objectPoints = std::move(validObjectPoints);
     detection.ids = std::move(validIds);
+    // 四个非共线对应点是平面位姿与后续标定的最低几何要求
     detection.usable = detection.imagePoints.size() >= 4
                        && hasNonCollinearPoints(detection.objectPoints);
     return detection;
@@ -381,6 +389,7 @@ cv::Vec3d matToVec3d(const cv::Mat& input)
     if (input.total() != 3) {
         return {};
     }
+    // OpenCV 可能返回 3×1 或 1×3，这里统一展平并转为双精度值类型
     cv::Mat values;
     input.reshape(1, 1).convertTo(values, CV_64F);
     return {values.at<double>(0, 0),
@@ -395,6 +404,7 @@ double viewReprojectionError(
     const cv::Mat& cameraMatrix, const cv::Mat& distCoeffs,
     CameraModel cameraModel)
 {
+    // 必须使用与求解一致的投影模型，否则鱼眼结果的单图误差不可比较
     std::vector<cv::Point2f> projectedPoints;
     if (cameraModel == CameraModel::Fisheye) {
         cv::fisheye::projectPoints(
@@ -475,6 +485,7 @@ QImage Calibrator::previewImage(const QString& filePath,
         const QFileInfo fileInfo(filePath);
         const qint64 modifiedMs =
             fileInfo.lastModified().toMSecsSinceEpoch();
+        // 文件身份、元数据及所有检测相关参数一致时复用角点叠加结果
         const bool cacheHit =
             filePath == previewCacheFilePath_
             && fileInfo.size() == previewCacheFileSize_
@@ -505,6 +516,7 @@ QImage Calibrator::previewImage(const QString& filePath,
             *found = previewCacheFound_;
         }
 
+        // 去畸变仅影响显示副本，缓存始终保存原分辨率的角点叠加图
         cv::Mat display = previewCacheAnnotated_;
         const bool matchingResolution =
             !calib.imageSize.isValid()
@@ -549,6 +561,7 @@ CalibrationResult Calibrator::calibrate(const QStringList& files,
     }
 
     try {
+        // 阶段一：逐图建立标定板物理点与图像角点的一一对应关系
         std::vector<std::vector<cv::Point3f>> objectPoints;
         std::vector<std::vector<cv::Point2f>> imagePoints;
         QStringList usedFiles;
@@ -566,6 +579,7 @@ CalibrationResult Calibrator::calibrate(const QStringList& files,
                 cv::imread(files[i].toStdString(), cv::IMREAD_COLOR);
             bool detected = false;
             if (!img.empty()) {
+                // 同一次求解必须使用统一分辨率，内参不能直接跨尺寸混用
                 if (imageSize.width == 0) {
                     imageSize = img.size();
                 } else if (img.size() != imageSize) {
@@ -612,6 +626,7 @@ CalibrationResult Calibrator::calibrate(const QStringList& files,
             return result;
         }
 
+        // 阶段二：根据相机模型组装约束标志并执行非线性标定求解
         cv::Mat cameraMatrix = cv::Mat::eye(3, 3, CV_64F);
         cv::Mat distCoeffs;
         std::vector<cv::Mat> rvecs;
@@ -648,6 +663,7 @@ CalibrationResult Calibrator::calibrate(const QStringList& files,
                 distCoeffs, rvecs, tvecs, flags);
         }
 
+        // OpenCV 可能在退化数据上返回非有限数或非正焦距，不能视为成功结果
         const bool parametersValid =
             std::isfinite(rms)
             && cv::checkRange(cameraMatrix)
@@ -663,6 +679,7 @@ CalibrationResult Calibrator::calibrate(const QStringList& files,
                 "标定求解返回了无效的内参或畸变系数，请检查图片质量、标定板参数和拍摄姿态。");
             return result;
         }
+        // 阶段三：逐视图重新投影，形成可诊断、可排除的图片级质量数据
         const size_t poseCount =
             std::min({rvecs.size(), tvecs.size(),
                       objectPoints.size(), imagePoints.size(),
@@ -755,6 +772,7 @@ bool Calibrator::exportParameters(const QString& filePath,
     }
 
     try {
+        // 先让 FileStorage 在内存中生成其余 YAML，再通过 QSaveFile 原子落盘
         cv::FileStorage storage(
             ".yaml", cv::FileStorage::WRITE
                          | cv::FileStorage::MEMORY
@@ -811,6 +829,7 @@ bool Calibrator::exportParameters(const QString& filePath,
         cv::Mat distortionCoefficients;
         result.distCoeffs.reshape(1, 1).convertTo(
             distortionCoefficients, CV_64F);
+        // 先写占位行，稍后替换为 OpenCV matrix 形式，兼顾 OpenCV 与常规 YAML 使用者
         storage << "distortion_coefficients" << 0;
         storage << "poses" << "[";
         for (const CalibrationPose& pose : result.poses) {
@@ -849,6 +868,7 @@ bool Calibrator::exportParameters(const QString& filePath,
         }
         distortionBlock << " ]";
 
+        // FileStorage 无法在当前顺序中直接写所需块样式，因此精确替换占位行
         const cv::String distortionKey = "distortion_coefficients:";
         const size_t lineStart = yaml.find(distortionKey);
         const size_t lineEnd = yaml.find('\n', lineStart);
@@ -910,6 +930,7 @@ std::optional<CalibrationResult> Calibrator::importParameters(
             return std::nullopt;
         }
 
+        // 旧文件缺少可选元数据时采用当前默认值，但核心矩阵和分辨率必须有效
         CalibrationResult result;
         cv::String cameraModel;
         readIfPresent(storage, "camera_model", cameraModel);
@@ -932,6 +953,7 @@ std::optional<CalibrationResult> Calibrator::importParameters(
         }
         result.distCoeffs = result.distCoeffs.reshape(1, 1);
         result.distCoeffs.convertTo(result.distCoeffs, CV_64F);
+        // 当前导出契约固定为针孔 5 个、鱼眼 4 个畸变系数
         const size_t expectedCount =
             result.options.cameraModel == CameraModel::Fisheye ? 4U : 5U;
         if (result.distCoeffs.total() != expectedCount
