@@ -677,12 +677,14 @@ void MainWindow::onCompareAlgorithms()
                 QMetaObject::invokeMethod(
                     this, [this, index, total = candidates.size()] {
                         if (auxiliaryProgressDialog_) {
-                            auxiliaryProgressDialog_->setValue(
-                                static_cast<int>(index + 1));
                             auxiliaryProgressDialog_->setLabelText(
                                 tr("已完成 %1 / %2 个候选算法")
                                     .arg(index + 1)
                                     .arg(total));
+                            // 模态 QProgressDialog::setValue() 可能处理嵌套事件，
+                            // finished 回调会在其中销毁进度框，因此必须最后调用。
+                            auxiliaryProgressDialog_->setValue(
+                                static_cast<int>(index + 1));
                         }
                     }, Qt::QueuedConnection);
             }
@@ -1015,11 +1017,13 @@ void MainWindow::onExportUndistortedImages()
                 QMetaObject::invokeMethod(
                     this, [this, value = index + 1, total = files.size()] {
                         if (auxiliaryProgressDialog_) {
-                            auxiliaryProgressDialog_->setValue(value);
                             auxiliaryProgressDialog_->setLabelText(
                                 tr("正在批量导出... %1 / %2")
                                     .arg(value)
                                     .arg(total));
+                            // 与算法对比相同，setValue(max) 可能触发嵌套事件
+                            // 并销毁进度框，后面不能再访问该指针。
+                            auxiliaryProgressDialog_->setValue(value);
                         }
                     }, Qt::QueuedConnection);
             }

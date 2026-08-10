@@ -146,6 +146,23 @@ if(BUILD_TESTING)
         COMMAND CalibrationCompletionTest
                 "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
     )
+
+    add_executable(CalibrationComparisonLifecycleTest
+        tests/calibration_comparison_lifecycle_test.cpp
+    )
+    target_link_libraries(CalibrationComparisonLifecycleTest PRIVATE
+        CalibrationUi
+    )
+
+    add_test(
+        NAME algorithm_comparison_lifecycle_does_not_crash
+        COMMAND CalibrationComparisonLifecycleTest
+                "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
+    )
+    set_tests_properties(algorithm_comparison_lifecycle_does_not_crash PROPERTIES
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        TIMEOUT 45
+    )
     set_tests_properties(calibration_completion_does_not_crash PROPERTIES
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
         TIMEOUT 30
