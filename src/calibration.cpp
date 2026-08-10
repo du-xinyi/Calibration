@@ -15,7 +15,10 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <iomanip>
 #include <limits>
+#include <locale>
+#include <sstream>
 #include <utility>
 #include <vector>
 
@@ -754,7 +757,7 @@ bool Calibrator::exportParameters(const QString& filePath,
         cv::Mat distortionCoefficients;
         result.distCoeffs.reshape(1, 1).convertTo(
             distortionCoefficients, CV_64F);
-        storage << "distortion_coefficients" << distortionCoefficients;
+        storage << "distortion_coefficients" << 0;
         storage << "poses" << "[";
         for (const CalibrationPose& pose : result.poses) {
             storage << "{"
@@ -773,7 +776,30 @@ bool Calibrator::exportParameters(const QString& filePath,
         }
         storage << "]";
 
-        const cv::String yaml = storage.releaseAndGetString();
+        cv::String yaml = storage.releaseAndGetString();
+        std::ostringstream distortionLine;
+        distortionLine.imbue(std::locale::classic());
+        distortionLine << std::setprecision(
+                              std::numeric_limits<double>::max_digits10)
+                       << "distortion_coefficients: [ ";
+        for (int col = 0; col < distortionCoefficients.cols; ++col) {
+            if (col > 0) {
+                distortionLine << ", ";
+            }
+            distortionLine << distortionCoefficients.at<double>(0, col);
+        }
+        distortionLine << " ]";
+
+        const cv::String distortionKey = "distortion_coefficients:";
+        const size_t lineStart = yaml.find(distortionKey);
+        const size_t lineEnd = yaml.find('\n', lineStart);
+        if (lineStart == cv::String::npos || lineEnd == cv::String::npos) {
+            if (error) {
+                *error = QObject::tr("无法格式化畸变系数。");
+            }
+            return false;
+        }
+        yaml.replace(lineStart, lineEnd - lineStart, distortionLine.str());
         QSaveFile output(filePath);
         if (!output.open(QIODevice::WriteOnly)) {
             if (error) {
