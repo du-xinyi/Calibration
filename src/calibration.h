@@ -8,6 +8,7 @@
 #include <opencv2/core.hpp>
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 inline constexpr double kOverallRmsWarningThresholdPx = 1.0; ///< 整体 RMS 告警阈值
@@ -154,6 +155,25 @@ public:
     bool exportParameters(const QString& filePath,
                           const CalibrationResult& result,
                           QString* error = nullptr) const;
+
+    /**
+     * @brief 从本工具或 OpenCV 兼容 YAML 中读取相机参数。
+     *
+     * 同时支持 3×3 嵌套数组和 `!!opencv-matrix` 形式的相机矩阵。
+     * 读入数据会检查矩阵维度、有限性、焦距和模型对应的畸变系数数量。
+     */
+    std::optional<CalibrationResult> importParameters(
+        const QString& filePath, QString* error = nullptr) const;
+
+    /**
+     * @brief 使用给定标定结果去畸变并写出单张图片。
+     *
+     * 输入分辨率必须与标定分辨率完全一致，避免静默应用错误内参。
+     */
+    bool undistortImageFile(const QString& inputPath,
+                            const QString& outputPath,
+                            const CalibrationResult& result,
+                            QString* error = nullptr) const;
 
 private:
     QString previewCacheFilePath_;

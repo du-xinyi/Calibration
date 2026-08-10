@@ -1,4 +1,7 @@
 #include "mainwindow.h"
+#include "algorithm_comparison_dialog.h"
+#include "calibration_project.h"
+#include "image_quality.h"
 #include "pose_result_dialog.h"
 #include "ui_mainwindow.h"
 
@@ -39,12 +42,17 @@
 
 #include <QtConcurrent>
 
+#include <algorithm>
+#include <bitset>
 #include <cmath>
+#include <utility>
 
 namespace {
 
 constexpr int kThumbnailSize = 96;
 constexpr int kRoleFilePath = Qt::UserRole + 1;
+constexpr int kRoleImageHash = Qt::UserRole + 2;
+constexpr int kRoleQualityWarnings = Qt::UserRole + 3;
 
 QIcon themedIcon(QStyle* style, QStyle::StandardPixmap fallback,
                  const QStringList& names)
@@ -97,6 +105,14 @@ bool sameCalibrationOptions(const CalibrationOptions& lhs,
            && lhs.radialCoeffs == rhs.radialCoeffs;
 }
 
+void setComboValue(QComboBox* combo, int value)
+{
+    const int index = combo->findData(value);
+    if (index >= 0) {
+        combo->setCurrentIndex(index);
+    }
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -132,19 +148,50 @@ MainWindow::~MainWindow()
             calibWatcher_->waitForFinished();
         }
     }
+    auxiliaryCanceled_.store(true);
+    if (comparisonWatcher_ != nullptr && comparisonWatcher_->isRunning()) {
+        disconnect(comparisonWatcher_, nullptr, this, nullptr);
+        comparisonWatcher_->waitForFinished();
+    }
+    if (batchWatcher_ != nullptr && batchWatcher_->isRunning()) {
+        disconnect(batchWatcher_, nullptr, this, nullptr);
+        batchWatcher_->waitForFinished();
+    }
     QCoreApplication::removePostedEvents(this);
 }
 
 void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu(tr("文件(&F)"));
+    openProjectAction_ = fileMenu->addAction(
+        tr("打开项目(&O)..."), QKeySequence(QStringLiteral("Ctrl+Alt+O")),
+        this, &MainWindow::onOpenProject);
+    openProjectAction_->setObjectName(QStringLiteral("openProjectAction"));
+    saveProjectAction_ = fileMenu->addAction(
+        tr("保存项目(&S)..."), QKeySequence(QStringLiteral("Ctrl+Alt+S")),
+        this, &MainWindow::onSaveProject);
+    saveProjectAction_->setObjectName(QStringLiteral("saveProjectAction"));
+    fileMenu->addSeparator();
     fileMenu->addAction(tr("添加图片(&A)..."), QKeySequence::Open, this,
                         &MainWindow::onAddImages);
     fileMenu->addAction(tr("从文件夹添加(&F)..."),
                         QKeySequence("Ctrl+Shift+O"), this,
                         &MainWindow::onAddImagesFromFolder);
     fileMenu->addSeparator();
+    importAction_ = fileMenu->addAction(
+        tr("导入相机参数(&I)..."), this, &MainWindow::onImportParameters);
+    importAction_->setObjectName(QStringLiteral("importParametersAction"));
+    batchExportAction_ = fileMenu->addAction(
+        tr("批量导出去畸变图片(&U)..."), this,
+        &MainWindow::onExportUndistortedImages);
+    batchExportAction_->setObjectName(QStringLiteral("batchExportAction"));
+    fileMenu->addSeparator();
     fileMenu->addAction(tr("退出(&X)"), QKeySequence::Quit, this, &QWidget::close);
+
+    auto* calibrationMenu = menuBar()->addMenu(tr("标定(&C)"));
+    compareAction_ = calibrationMenu->addAction(
+        tr("比较标定算法..."), this, &MainWindow::onCompareAlgorithms);
+    compareAction_->setObjectName(QStringLiteral("compareAlgorithmsAction"));
 
     auto* viewMenu = menuBar()->addMenu(tr("视图(&V)"));
     viewMenu->addAction(tr("适应窗口"), QKeySequence("Ctrl+0"), this,
@@ -184,6 +231,13 @@ void MainWindow::buildToolBar()
         tr("标定"), this, &MainWindow::onCalibrate);
     calibrateAction_->setObjectName(QStringLiteral("calibrateAction"));
     calibrateAction_->setToolTip(tr("至少添加 3 张图片后开始标定"));
+    bar->addAction(compareAction_);
+    compareAction_->setIcon(themedIcon(
+        style(), QStyle::SP_FileDialogDetailedView,
+        {QStringLiteral("view-list-details-symbolic"),
+         QStringLiteral("view-list-details")}));
+    compareAction_->setText(tr("算法对比"));
+    compareAction_->setToolTip(tr("比较 Pinhole/Fisheye 与可用角点检测器"));
     bar->addSeparator();
     poseAction_ = bar->addAction(
         themedIcon(style(), QStyle::SP_BrowserReload,
@@ -334,7 +388,7 @@ void MainWindow::updateUiState()
     const int imageCount = imageList_ == nullptr ? 0 : imageList_->count();
     const bool hasImages = imageCount > 0;
     const bool hasCalibration = lastResult_.success;
-    const bool busy = calibActive_;
+    const bool busy = isBusy();
 
     if (statusImageCount_ != nullptr) {
         statusImageCount_->setText(tr("%1 张图片").arg(imageCount));
@@ -351,12 +405,17 @@ void MainWindow::updateUiState()
     }
 
     calibrateAction_->setEnabled(imageCount >= 3 && !busy);
+    compareAction_->setEnabled(imageCount >= 3 && !busy);
     calibrateAction_->setToolTip(
         busy ? tr("标定正在进行")
              : imageCount >= 3 ? tr("开始相机标定")
                                : tr("至少添加 3 张图片后开始标定"));
     clearAction_->setEnabled(hasImages && !busy);
+    saveProjectAction_->setEnabled(hasImages && !busy);
+    openProjectAction_->setEnabled(!busy);
+    importAction_->setEnabled(!busy);
     exportAction_->setEnabled(hasCalibration && !busy);
+    batchExportAction_->setEnabled(hasCalibration && hasImages && !busy);
     exportAction_->setToolTip(
         hasCalibration ? tr("导出相机参数")
                        : tr("完成一次成功标定后才能导出"));
@@ -370,9 +429,15 @@ void MainWindow::updateUiState()
     imageList_->setEnabled(!busy);
 }
 
+bool MainWindow::isBusy() const
+{
+    return calibActive_ || auxiliaryActive_;
+}
+
 void MainWindow::invalidateCalibrationResult()
 {
     lastResult_ = {};
+    lastResultImported_ = false;
     showUndistortedCheck_->setChecked(false);
     if (statusRmsError_ != nullptr) {
         statusRmsError_->setText(tr("RMS: --"));
@@ -385,6 +450,9 @@ void MainWindow::invalidateCalibrationResult()
 
 void MainWindow::onAddImages()
 {
+    if (isBusy()) {
+        return;
+    }
     const auto files = QFileDialog::getOpenFileNames(
         this, tr("选择图片"), lastDir_, supportedImageDialogFilter());
     if (files.isEmpty()) {
@@ -396,6 +464,9 @@ void MainWindow::onAddImages()
 
 void MainWindow::onAddImagesFromFolder()
 {
+    if (isBusy()) {
+        return;
+    }
     const QString dir = QFileDialog::getExistingDirectory(
         this, tr("选择图片文件夹"), lastDir_);
     if (dir.isEmpty()) {
@@ -423,15 +494,206 @@ void MainWindow::onAddImagesFromFolder()
     loadImages(files);
 }
 
+void MainWindow::onOpenProject()
+{
+    if (isBusy()) {
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("打开标定项目"), lastDir_,
+        tr("标定项目 (*.calibration.json *.json)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    QString error;
+    const auto project = CalibrationProjectIo::load(path, &error);
+    if (!project.has_value()) {
+        QMessageBox::warning(this, tr("打开标定项目"),
+                             tr("打开失败：%1").arg(error));
+        return;
+    }
+    imageList_->clear();
+    currentPixmap_ = {};
+    invalidateCalibrationResult();
+    applyOptions(project->options);
+    loadImages(project->imagePaths);
+    lastDir_ = QFileInfo(path).absolutePath();
+    statusBar()->showMessage(tr("已打开项目：%1").arg(path), 5000);
+}
+
+void MainWindow::onSaveProject()
+{
+    if (isBusy() || imageList_->count() == 0) {
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("保存标定项目"),
+        QDir(lastDir_).filePath(QStringLiteral("calibration.calibration.json")),
+        tr("标定项目 (*.calibration.json *.json)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    QString error;
+    if (!CalibrationProjectIo::save(
+            path, CalibrationProject{currentOptions(), collectFiles()}, &error)) {
+        QMessageBox::warning(this, tr("保存标定项目"),
+                             tr("保存失败：%1").arg(error));
+        return;
+    }
+    lastDir_ = QFileInfo(path).absolutePath();
+    QMessageBox::information(this, tr("保存标定项目"),
+                             tr("项目已保存到：\n%1").arg(path));
+}
+
+void MainWindow::onImportParameters()
+{
+    if (isBusy()) {
+        return;
+    }
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("导入相机参数"), lastDir_, tr("YAML 文件 (*.yaml *.yml)"));
+    if (path.isEmpty()) {
+        return;
+    }
+    QString error;
+    const auto result = calibrator_.importParameters(path, &error);
+    if (!result.has_value()) {
+        QMessageBox::warning(this, tr("导入相机参数"),
+                             tr("导入失败：%1").arg(error));
+        return;
+    }
+    applyOptions(result->options);
+    lastResult_ = *result;
+    lastResultImported_ = true;
+    lastDir_ = QFileInfo(path).absolutePath();
+    updateUiState();
+    statusRmsError_->setText(
+        tr("RMS: %1 px（导入）").arg(result->rmsError, 0, 'f', 3));
+
+    QStringList mismatches;
+    for (const QString& file : collectFiles()) {
+        QImageReader reader(file);
+        if (reader.size().isValid() && reader.size() != result->imageSize) {
+            mismatches << QFileInfo(file).fileName();
+        }
+    }
+    if (!mismatches.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("分辨率不一致"),
+            tr("已导入参数，但 %1 张图片与标定分辨率 %2×%3 不一致。"
+               "这些图片不会应用去畸变。")
+                .arg(mismatches.size())
+                .arg(result->imageSize.width())
+                .arg(result->imageSize.height()));
+    } else {
+        QMessageBox::information(this, tr("导入相机参数"), result->report);
+    }
+    onImageSelectionChanged();
+}
+
 void MainWindow::onCalibrate()
 {
     startCalibration();
 }
 
+void MainWindow::onCompareAlgorithms()
+{
+    if (isBusy()) {
+        return;
+    }
+    const QStringList files = collectFiles();
+    if (files.size() < 3) {
+        QMessageBox::warning(this, tr("算法对比"), tr("至少需要 3 张图片。"));
+        return;
+    }
+
+    const CalibrationOptions base = currentOptions();
+    std::vector<CalibrationOptions> candidates;
+    for (CameraModel model : {CameraModel::Pinhole, CameraModel::Fisheye}) {
+        CalibrationOptions options = base;
+        options.cameraModel = model;
+        options.radialCoeffs = model == CameraModel::Fisheye ? 4 : 3;
+        if (base.boardType == CalibrationBoardType::Chessboard) {
+            options.method = CalibrationMethod::Classic;
+            candidates.push_back(options);
+            options.method = CalibrationMethod::SectorBased;
+            candidates.push_back(options);
+        } else {
+            candidates.push_back(options);
+        }
+    }
+
+    auxiliaryProgressDialog_ = new QProgressDialog(
+        tr("正在比较标定算法..."), tr("取消"), 0,
+        static_cast<int>(candidates.size()), this);
+    auxiliaryProgressDialog_->setWindowModality(Qt::WindowModal);
+    auxiliaryProgressDialog_->setMinimumDuration(0);
+    auxiliaryProgressDialog_->setValue(0);
+    auxiliaryCanceled_.store(false);
+    auxiliaryActive_ = true;
+    updateUiState();
+    connect(auxiliaryProgressDialog_, &QProgressDialog::canceled, this,
+            [this] { auxiliaryCanceled_.store(true); });
+
+    comparisonWatcher_ =
+        new QFutureWatcher<std::vector<CalibrationResult>>(this);
+    connect(comparisonWatcher_,
+            &QFutureWatcher<std::vector<CalibrationResult>>::finished,
+            this, [this] {
+                const auto results = comparisonWatcher_->result();
+                comparisonWatcher_->deleteLater();
+                comparisonWatcher_ = nullptr;
+                auxiliaryActive_ = false;
+                if (auxiliaryProgressDialog_) {
+                    auxiliaryProgressDialog_->close();
+                    auxiliaryProgressDialog_->deleteLater();
+                    auxiliaryProgressDialog_ = nullptr;
+                }
+                updateUiState();
+                if (results.empty()) {
+                    statusBar()->showMessage(tr("算法对比已取消"), 5000);
+                    return;
+                }
+                auto* dialog = new AlgorithmComparisonDialog(results, this);
+                dialog->setAttribute(Qt::WA_DeleteOnClose);
+                dialog->show();
+            });
+    Calibrator* worker = &calibrator_;
+    comparisonWatcher_->setFuture(QtConcurrent::run(
+        [this, worker, files, candidates] {
+            std::vector<CalibrationResult> results;
+            results.reserve(candidates.size());
+            for (size_t index = 0; index < candidates.size(); ++index) {
+                if (auxiliaryCanceled_.load()) {
+                    break;
+                }
+                CalibrationResult result = worker->calibrate(
+                    files, candidates[index], {},
+                    [this] { return auxiliaryCanceled_.load(); });
+                if (auxiliaryCanceled_.load()) {
+                    break;
+                }
+                results.push_back(std::move(result));
+                QMetaObject::invokeMethod(
+                    this, [this, index, total = candidates.size()] {
+                        if (auxiliaryProgressDialog_) {
+                            auxiliaryProgressDialog_->setValue(
+                                static_cast<int>(index + 1));
+                            auxiliaryProgressDialog_->setLabelText(
+                                tr("已完成 %1 / %2 个候选算法")
+                                    .arg(index + 1)
+                                    .arg(total));
+                        }
+                    }, Qt::QueuedConnection);
+            }
+            return results;
+        }));
+}
+
 void MainWindow::startCalibration(
     std::optional<CalibrationComparison> comparison)
 {
-    if (calibActive_) {
+    if (isBusy()) {
         return;  // 已有标定在运行，拒绝重入（否则旧 finished 会破坏新状态）
     }
 
@@ -538,6 +800,7 @@ void MainWindow::startCalibration(
 void MainWindow::presentResult(const CalibrationResult& result)
 {
     lastResult_ = result;
+    lastResultImported_ = false;
     updateUiState();
     if (result.success) {
         statusRmsError_->setText(
@@ -585,7 +848,7 @@ void MainWindow::onShowPoses()
 void MainWindow::onExcludeImagesAndRecalibrate(
     const QStringList& imagePaths, double baselineRms)
 {
-    if (calibActive_ || !lastResult_.success || imagePaths.isEmpty()) {
+    if (isBusy() || !lastResult_.success || imagePaths.isEmpty()) {
         return;
     }
 
@@ -659,8 +922,116 @@ void MainWindow::onExportParameters()
         tr("相机参数已保存到：\n%1").arg(outputPath));
 }
 
+void MainWindow::onExportUndistortedImages()
+{
+    if (isBusy() || !lastResult_.success) {
+        return;
+    }
+    const QString outputDirectory = QFileDialog::getExistingDirectory(
+        this, tr("选择去畸变图片输出文件夹"), lastDir_);
+    if (outputDirectory.isEmpty()) {
+        return;
+    }
+    const QStringList files = collectFiles();
+    if (files.isEmpty()) {
+        return;
+    }
+
+    auxiliaryProgressDialog_ = new QProgressDialog(
+        tr("正在批量导出去畸变图片..."), tr("取消"), 0, files.size(), this);
+    auxiliaryProgressDialog_->setWindowModality(Qt::WindowModal);
+    auxiliaryProgressDialog_->setMinimumDuration(0);
+    auxiliaryProgressDialog_->setValue(0);
+    auxiliaryCanceled_.store(false);
+    auxiliaryActive_ = true;
+    updateUiState();
+    connect(auxiliaryProgressDialog_, &QProgressDialog::canceled, this,
+            [this] { auxiliaryCanceled_.store(true); });
+
+    const CalibrationResult calibration = lastResult_;
+    batchWatcher_ = new QFutureWatcher<BatchUndistortSummary>(this);
+    connect(batchWatcher_, &QFutureWatcher<BatchUndistortSummary>::finished,
+            this, [this, outputDirectory] {
+                const BatchUndistortSummary summary = batchWatcher_->result();
+                batchWatcher_->deleteLater();
+                batchWatcher_ = nullptr;
+                auxiliaryActive_ = false;
+                if (auxiliaryProgressDialog_) {
+                    auxiliaryProgressDialog_->close();
+                    auxiliaryProgressDialog_->deleteLater();
+                    auxiliaryProgressDialog_ = nullptr;
+                }
+                updateUiState();
+                QString message = auxiliaryCanceled_.load()
+                                      ? tr("批量导出已取消。\n")
+                                      : QString();
+                message += tr("已导出 %1 张，跳过 %2 张。\n输出目录：%3")
+                        .arg(summary.written)
+                        .arg(summary.skipped)
+                        .arg(outputDirectory);
+                if (!summary.errors.isEmpty()) {
+                    message += tr("\n\n前几项错误：\n%1")
+                                   .arg(summary.errors.mid(0, 5).join('\n'));
+                }
+                if (summary.skipped > 0) {
+                    QMessageBox::warning(this, tr("批量导出去畸变图片"), message);
+                } else {
+                    QMessageBox::information(this, tr("批量导出去畸变图片"), message);
+                }
+            });
+    Calibrator* worker = &calibrator_;
+    batchWatcher_->setFuture(QtConcurrent::run(
+        [this, worker, files, outputDirectory, calibration] {
+            BatchUndistortSummary summary;
+            QSet<QString> outputNames;
+            for (int index = 0; index < files.size(); ++index) {
+                if (auxiliaryCanceled_.load()) {
+                    break;
+                }
+                const QFileInfo inputInfo(files[index]);
+                QString base = inputInfo.completeBaseName();
+                QString suffix = inputInfo.suffix().toLower();
+                if (suffix.isEmpty()) {
+                    suffix = QStringLiteral("png");
+                }
+                QString outputName = base + QStringLiteral("_undistorted.") + suffix;
+                int duplicateIndex = 2;
+                while (outputNames.contains(outputName)) {
+                    outputName = base + QStringLiteral("_undistorted_%1.")
+                                            .arg(duplicateIndex++)
+                                     + suffix;
+                }
+                outputNames.insert(outputName);
+                QString error;
+                if (worker->undistortImageFile(
+                        files[index], QDir(outputDirectory).filePath(outputName),
+                        calibration, &error)) {
+                    ++summary.written;
+                } else {
+                    ++summary.skipped;
+                    summary.errors << tr("%1：%2")
+                                          .arg(inputInfo.fileName(), error);
+                }
+                QMetaObject::invokeMethod(
+                    this, [this, value = index + 1, total = files.size()] {
+                        if (auxiliaryProgressDialog_) {
+                            auxiliaryProgressDialog_->setValue(value);
+                            auxiliaryProgressDialog_->setLabelText(
+                                tr("正在批量导出... %1 / %2")
+                                    .arg(value)
+                                    .arg(total));
+                        }
+                    }, Qt::QueuedConnection);
+            }
+            return summary;
+        }));
+}
+
 void MainWindow::onClearAll()
 {
+    if (isBusy()) {
+        return;
+    }
     imageList_->clear();
     currentPixmap_ = {};
     imageDisplay_->clear();
@@ -732,6 +1103,13 @@ void MainWindow::loadImages(const QStringList& files)
     int added = 0;
     int duplicates = 0;
     int failures = 0;
+    int qualityWarnings = 0;
+    QSet<quint64> loadedHashes;
+    for (int i = 0; i < imageList_->count(); ++i) {
+        if (const QListWidgetItem* item = imageList_->item(i)) {
+            loadedHashes.insert(item->data(kRoleImageHash).toULongLong());
+        }
+    }
     for (const QString& file : files) {
         if (loaded.contains(file)) {
             ++duplicates;
@@ -758,7 +1136,34 @@ void MainWindow::loadImages(const QStringList& files)
         auto* item = new QListWidgetItem(
             QIcon(QPixmap::fromImage(thumb)), QFileInfo(file).fileName());
         item->setData(kRoleFilePath, file);
-        item->setToolTip(file);
+        const ImageQualityResult quality = analyzeImageQuality(file);
+        QStringList warnings = quality.warnings;
+        const bool similarImage = std::any_of(
+            loadedHashes.cbegin(), loadedHashes.cend(),
+            [&quality](quint64 existingHash) {
+                return std::bitset<64>(
+                           existingHash ^ quality.similarityHash)
+                           .count()
+                       <= 3;
+            });
+        if (similarImage) {
+            warnings << tr("与已加载图片画面高度相似");
+        }
+        loadedHashes.insert(quality.similarityHash);
+        item->setData(kRoleImageHash,
+                      QVariant::fromValue<qulonglong>(quality.similarityHash));
+        item->setData(kRoleQualityWarnings, warnings);
+        QString toolTip = file;
+        if (!warnings.isEmpty()) {
+            ++qualityWarnings;
+            item->setBackground(QColor(255, 244, 204));
+            item->setText(item->text() + QStringLiteral(" ⚠"));
+            toolTip += tr("\n质量预检：%1\n清晰度：%2，平均亮度：%3")
+                           .arg(warnings.join(QStringLiteral("；")))
+                           .arg(quality.sharpness, 0, 'f', 1)
+                           .arg(quality.meanBrightness, 0, 'f', 1);
+        }
+        item->setToolTip(toolTip);
         imageList_->addItem(item);
         ++added;
     }
@@ -769,7 +1174,21 @@ void MainWindow::loadImages(const QStringList& files)
     }
 
     if (added > 0) {
-        invalidateCalibrationResult();
+        if (lastResultImported_) {
+            updateUiState();
+        } else {
+            invalidateCalibrationResult();
+        }
+        if (qualityWarnings > 0) {
+            statusBar()->showMessage(
+                tr("已添加 %1 张图片，其中 %2 张有质量提示；鼠标悬停查看详情。")
+                    .arg(added)
+                    .arg(qualityWarnings),
+                8000);
+        } else if (duplicates > 0) {
+            statusBar()->showMessage(
+                tr("已忽略 %1 个重复路径").arg(duplicates), 5000);
+        }
     } else {
         updateUiState();
     }
@@ -778,15 +1197,46 @@ void MainWindow::loadImages(const QStringList& files)
 void MainWindow::showImage(const QString& filePath, bool* found)
 {
     bool detected = false;
+    bool applyUndistortion = showUndistortedCheck_->isChecked();
+    if (applyUndistortion && lastResult_.success
+        && lastResult_.imageSize.isValid()) {
+        QImageReader reader(filePath);
+        if (reader.size().isValid() && reader.size() != lastResult_.imageSize) {
+            applyUndistortion = false;
+            statusBar()->showMessage(
+                tr("当前图片为 %1×%2，标定参数适用于 %3×%4；未应用去畸变。")
+                    .arg(reader.size().width())
+                    .arg(reader.size().height())
+                    .arg(lastResult_.imageSize.width())
+                    .arg(lastResult_.imageSize.height()),
+                8000);
+        }
+    }
     const QImage annotated = calibrator_.previewImage(
         filePath, currentOptions(), lastResult_,
-        showUndistortedCheck_->isChecked(), &detected);
+        applyUndistortion, &detected);
     currentPixmap_ = QPixmap::fromImage(annotated);
     fitImageToView();
 
     if (found) {
         *found = detected;
     }
+}
+
+void MainWindow::applyOptions(const CalibrationOptions& options)
+{
+    setComboValue(cameraModelCombo_, static_cast<int>(options.cameraModel));
+    setComboValue(boardTypeCombo_, static_cast<int>(options.boardType));
+    boardColsSpin_->setValue(options.boardSize.width());
+    boardRowsSpin_->setValue(options.boardSize.height());
+    squareSizeSpin_->setValue(options.squareSize);
+    markerSizeSpin_->setMaximum(qMax(0.001, options.squareSize - 0.001));
+    markerSizeSpin_->setValue(options.markerSize);
+    setComboValue(dictionaryCombo_, static_cast<int>(options.dictionary));
+    setComboValue(methodCombo_, static_cast<int>(options.method));
+    skewCheck_->setChecked(options.skew);
+    tangentialCheck_->setChecked(options.tangential);
+    radialCoeffSpin_->setValue(options.radialCoeffs);
 }
 
 CalibrationOptions MainWindow::currentOptions() const

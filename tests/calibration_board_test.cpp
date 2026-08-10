@@ -1,4 +1,6 @@
 #include "calibration.h"
+#include "calibration_project.h"
+#include "image_quality.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -108,6 +110,41 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
+    const QString overexposedPath =
+        tempDir.filePath(QStringLiteral("overexposed.png"));
+    if (!cv::imwrite(overexposedPath.toStdString(),
+                     cv::Mat(240, 320, CV_8UC1, cv::Scalar(255)))) {
+        qCritical() << "无法创建质量预检测试图";
+        return EXIT_FAILURE;
+    }
+    const ImageQualityResult overexposed = analyzeImageQuality(overexposedPath);
+    if (!overexposed.readable || overexposed.warnings.isEmpty()
+        || overexposed.meanBrightness < 250.0) {
+        qCritical() << "图片质量预检没有识别明显过曝图片";
+        return EXIT_FAILURE;
+    }
+
+    const QString projectPath =
+        tempDir.filePath(QStringLiteral("roundtrip.calibration.json"));
+    const CalibrationProject sourceProject{
+        charuco, {charucoPath, chessboardPath}};
+    QString projectError;
+    if (!CalibrationProjectIo::save(projectPath, sourceProject, &projectError)) {
+        qCritical().noquote() << "保存标定项目失败：" << projectError;
+        return EXIT_FAILURE;
+    }
+    const auto loadedProject =
+        CalibrationProjectIo::load(projectPath, &projectError);
+    if (!loadedProject.has_value()
+        || loadedProject->imagePaths != sourceProject.imagePaths
+        || loadedProject->options.boardType != charuco.boardType
+        || loadedProject->options.boardSize != charuco.boardSize
+        || loadedProject->options.squareSize != charuco.squareSize
+        || loadedProject->options.markerSize != charuco.markerSize) {
+        qCritical().noquote() << "标定项目往返读写不一致：" << projectError;
+        return EXIT_FAILURE;
+    }
+
     QDir imageDir(QString::fromLocal8Bit(argv[1]));
     QStringList files;
     for (const QString& name : imageDir.entryList(
@@ -180,6 +217,51 @@ int main(int argc, char* argv[])
         tempDir.filePath(QStringLiteral("camera_parameters.yaml"));
     if (!calibrator.exportParameters(exportPath, result, &exportError)) {
         qCritical().noquote() << "导出相机参数失败：" << exportError;
+        return EXIT_FAILURE;
+    }
+
+    QString importError;
+    const auto imported = calibrator.importParameters(exportPath, &importError);
+    if (!imported.has_value() || !imported->success
+        || imported->imageSize != result.imageSize
+        || imported->options.cameraModel != result.options.cameraModel
+        || cv::norm(imported->cameraMatrix, result.cameraMatrix,
+                    cv::NORM_INF) > 1.0e-12
+        || cv::norm(imported->distCoeffs,
+                    result.distCoeffs.reshape(1, 1), cv::NORM_INF) > 1.0e-12) {
+        qCritical().noquote() << "导入刚导出的 YAML 失败：" << importError;
+        return EXIT_FAILURE;
+    }
+
+    const QString undistortedPath =
+        tempDir.filePath(QStringLiteral("undistorted.jpg"));
+    QString undistortError;
+    if (!calibrator.undistortImageFile(
+            files.first(), undistortedPath, *imported, &undistortError)) {
+        qCritical().noquote() << "单图去畸变导出失败：" << undistortError;
+        return EXIT_FAILURE;
+    }
+    const cv::Mat undistorted =
+        cv::imread(undistortedPath.toStdString(), cv::IMREAD_COLOR);
+    if (undistorted.empty()
+        || undistorted.cols != result.imageSize.width()
+        || undistorted.rows != result.imageSize.height()) {
+        qCritical() << "去畸变输出图片尺寸错误";
+        return EXIT_FAILURE;
+    }
+    const QString mismatchPath =
+        tempDir.filePath(QStringLiteral("mismatch.png"));
+    cv::Mat mismatchedImage(result.imageSize.height() / 2,
+                            result.imageSize.width() / 2,
+                            CV_8UC3, cv::Scalar(127, 127, 127));
+    cv::imwrite(mismatchPath.toStdString(), mismatchedImage);
+    undistortError.clear();
+    if (calibrator.undistortImageFile(
+            mismatchPath,
+            tempDir.filePath(QStringLiteral("must_not_exist.png")),
+            *imported, &undistortError)
+        || !undistortError.contains(QStringLiteral("分辨率"))) {
+        qCritical() << "分辨率不一致的图片不应被去畸变";
         return EXIT_FAILURE;
     }
 

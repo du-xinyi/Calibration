@@ -98,11 +98,14 @@ add_compile_options(
 
 add_library(CalibrationCore STATIC
     src/calibration.cpp
+    src/calibration_project.cpp
+    src/image_quality.cpp
 )
 target_include_directories(CalibrationCore PUBLIC src)
 target_link_libraries(CalibrationCore PUBLIC Qt6::Gui ${OpenCV_LIBS})
 
 add_library(CalibrationUi STATIC
+    src/algorithm_comparison_dialog.cpp
     src/mainwindow.cpp
     src/mainwindow.ui
     src/pose_result_dialog.cpp

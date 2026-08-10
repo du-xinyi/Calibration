@@ -54,9 +54,14 @@ protected:
 private slots:
     void onAddImages();
     void onAddImagesFromFolder();
+    void onOpenProject();
+    void onSaveProject();
+    void onImportParameters();
     void onCalibrate();
+    void onCompareAlgorithms();
     void onShowPoses();
     void onExportParameters();
+    void onExportUndistortedImages();
     void onClearAll();
     void onImageSelectionChanged();
     void onCameraModelChanged();
@@ -87,6 +92,10 @@ private:
     void fitImageToView();
     /// 在 GUI 线程展示标定结果（成功弹报告、失败弹警告，刷新状态栏与预览）。
     void presentResult(const CalibrationResult& result);
+    /// 将项目或参数文件中的选项同步到界面控件。
+    void applyOptions(const CalibrationOptions& options);
+    /// 返回当前是否有后台标定、对比或批量导出任务。
+    bool isBusy() const;
 
     /// 收集界面中当前选择的完整标定参数。
     CalibrationOptions currentOptions() const;
@@ -116,8 +125,13 @@ private:
     QLabel* statusImageCount_ = nullptr;
     QLabel* statusRmsError_ = nullptr;
     QAction* calibrateAction_ = nullptr;
+    QAction* compareAction_ = nullptr;
     QAction* poseAction_ = nullptr;
     QAction* exportAction_ = nullptr;
+    QAction* batchExportAction_ = nullptr;
+    QAction* openProjectAction_ = nullptr;
+    QAction* saveProjectAction_ = nullptr;
+    QAction* importAction_ = nullptr;
     QAction* clearAction_ = nullptr;
 
     QString lastDir_; ///< 记录上次打开的目录，作为下次对话框起点
@@ -125,11 +139,22 @@ private:
 
     Calibrator calibrator_;           ///< OpenCV 标定封装
     CalibrationResult lastResult_;    ///< 最近一次标定结果
+    bool lastResultImported_ = false;  ///< 导入参数不因追加待校正图片而失效
 
     QProgressDialog* progressDialog_ = nullptr; ///< 标定进度对话框
     QFutureWatcher<CalibrationResult>* calibWatcher_ = nullptr; ///< 后台标定 future
     std::atomic<bool> calibCanceled_{false};    ///< 跨线程取消标志
     bool calibActive_ = false;                  ///< 标定进行中标志（防止重入）
+    struct BatchUndistortSummary {
+        int written = 0;
+        int skipped = 0;
+        QStringList errors;
+    };
+    QFutureWatcher<std::vector<CalibrationResult>>* comparisonWatcher_ = nullptr;
+    QFutureWatcher<BatchUndistortSummary>* batchWatcher_ = nullptr;
+    QProgressDialog* auxiliaryProgressDialog_ = nullptr;
+    std::atomic<bool> auxiliaryCanceled_{false};
+    bool auxiliaryActive_ = false;
     QTimer* debounceTimer_ = nullptr;           ///< 预览刷新的防抖计时器
     QPointer<PoseResultDialog> poseDialog_;     ///< 已打开的位姿对话框（防止重复）
 };

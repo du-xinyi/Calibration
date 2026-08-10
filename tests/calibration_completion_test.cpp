@@ -1,3 +1,4 @@
+#include "algorithm_comparison_dialog.h"
 #include "mainwindow.h"
 
 #include <QAction>
@@ -47,6 +48,27 @@ int main(int argc, char* argv[])
     }
 
     MainWindow window;
+    CalibrationResult comparisonPinhole;
+    comparisonPinhole.success = true;
+    comparisonPinhole.rmsError = 0.5;
+    comparisonPinhole.imagesUsed = 8;
+    comparisonPinhole.imagesTotal = 10;
+    comparisonPinhole.cameraMatrix = cv::Mat::eye(3, 3, CV_64F);
+    CalibrationResult comparisonFisheye = comparisonPinhole;
+    comparisonFisheye.options.cameraModel = CameraModel::Fisheye;
+    comparisonFisheye.rmsError = 0.8;
+    AlgorithmComparisonDialog comparisonDialog(
+        {comparisonFisheye, comparisonPinhole});
+    auto* comparisonTable = comparisonDialog.findChild<QTableWidget*>(
+        QStringLiteral("algorithmComparisonTable"));
+    if (comparisonTable == nullptr || comparisonTable->rowCount() != 2
+        || comparisonTable->columnCount() != 9
+        || comparisonTable->item(0, 0) == nullptr
+        || comparisonTable->item(0, 0)->text() != QStringLiteral("Pinhole")
+        || comparisonTable->item(0, 3)->text() != QStringLiteral("0.5000")) {
+        qCritical() << "算法对比表格内容或排序错误";
+        return EXIT_FAILURE;
+    }
     auto* rightPanel =
         window.findChild<QWidget*>(QStringLiteral("rightPanel"));
     auto* mainSplitter =
@@ -94,6 +116,16 @@ int main(int argc, char* argv[])
         window.findChild<QAction*>(QStringLiteral("exportAction"));
     auto* clearAction =
         window.findChild<QAction*>(QStringLiteral("clearAction"));
+    auto* openProjectAction =
+        window.findChild<QAction*>(QStringLiteral("openProjectAction"));
+    auto* saveProjectAction =
+        window.findChild<QAction*>(QStringLiteral("saveProjectAction"));
+    auto* importAction =
+        window.findChild<QAction*>(QStringLiteral("importParametersAction"));
+    auto* compareAction =
+        window.findChild<QAction*>(QStringLiteral("compareAlgorithmsAction"));
+    auto* batchExportAction =
+        window.findChild<QAction*>(QStringLiteral("batchExportAction"));
     if (rightPanel == nullptr || rightPanel->minimumWidth() != 220
         || rightPanel->maximumWidth() != 260
         || mainSplitter == nullptr || mainSplitter->handleWidth() != 4
@@ -144,7 +176,13 @@ int main(int argc, char* argv[])
         || clearAction == nullptr || clearAction->isEnabled()
         || clearAction->icon().isNull()
         || poseAction == nullptr || poseAction->isEnabled()
-        || poseAction->icon().isNull()) {
+        || poseAction->icon().isNull()
+        || openProjectAction == nullptr || !openProjectAction->isEnabled()
+        || saveProjectAction == nullptr || saveProjectAction->isEnabled()
+        || importAction == nullptr || !importAction->isEnabled()
+        || compareAction == nullptr || compareAction->isEnabled()
+        || compareAction->icon().isNull()
+        || batchExportAction == nullptr || batchExportAction->isEnabled()) {
         qCritical() << "相机模型、标定板或默认参数配置错误";
         return EXIT_FAILURE;
     }
@@ -178,7 +216,8 @@ int main(int argc, char* argv[])
 
     window.loadImages(files);
     if (!calibrateAction->isEnabled() || !clearAction->isEnabled()
-        || exportAction->isEnabled()
+        || exportAction->isEnabled() || !saveProjectAction->isEnabled()
+        || !compareAction->isEnabled() || batchExportAction->isEnabled()
         || imageListStack->currentIndex() != 1
         || imageListTitle->text()
                != QStringLiteral("Images (%1)").arg(files.size())
@@ -310,6 +349,11 @@ int main(int argc, char* argv[])
             }
             if (!exportAction->isEnabled()) {
                 qCritical() << "标定完成后导出入口未启用";
+                app.exit(EXIT_FAILURE);
+                return;
+            }
+            if (!batchExportAction->isEnabled()) {
+                qCritical() << "标定完成后批量去畸变入口未启用";
                 app.exit(EXIT_FAILURE);
                 return;
             }

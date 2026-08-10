@@ -130,6 +130,60 @@ QString detectionDisplayName(const CalibrationOptions& opts)
                : QStringLiteral("Chessboard / Sector-Based");
 }
 
+bool parseCameraMatrix(const cv::FileNode& node, cv::Mat& matrix)
+{
+    if (node.empty()) {
+        return false;
+    }
+    if (!node.isSeq()) {
+        node >> matrix;
+        matrix.convertTo(matrix, CV_64F);
+        return matrix.rows == 3 && matrix.cols == 3
+               && matrix.channels() == 1;
+    }
+    if (node.size() != 3) {
+        return false;
+    }
+    matrix = cv::Mat::zeros(3, 3, CV_64F);
+    for (int row = 0; row < 3; ++row) {
+        const cv::FileNode values = node[static_cast<size_t>(row)];
+        if (!values.isSeq() || values.size() != 3) {
+            return false;
+        }
+        for (int col = 0; col < 3; ++col) {
+            values[static_cast<size_t>(col)]
+                >> matrix.at<double>(row, col);
+        }
+    }
+    return true;
+}
+
+template<typename T>
+void readIfPresent(const cv::FileStorage& storage, const char* key, T& value)
+{
+    const cv::FileNode node = storage[key];
+    if (!node.empty()) {
+        node >> value;
+    }
+}
+
+ArucoDictionary parseDictionaryName(const cv::String& name)
+{
+    if (name == "DICT_4X4_50") {
+        return ArucoDictionary::Dict4x4_50;
+    }
+    if (name == "DICT_5X5_250") {
+        return ArucoDictionary::Dict5x5_250;
+    }
+    if (name == "DICT_6X6_250") {
+        return ArucoDictionary::Dict6x6_250;
+    }
+    if (name == "DICT_ARUCO_ORIGINAL") {
+        return ArucoDictionary::Original;
+    }
+    return ArucoDictionary::Dict5x5_100;
+}
+
 cv::String detectionMethodName(CalibrationMethod method)
 {
     return method == CalibrationMethod::Classic
@@ -452,7 +506,10 @@ QImage Calibrator::previewImage(const QString& filePath,
         }
 
         cv::Mat display = previewCacheAnnotated_;
-        if (showUndistorted && calib.success) {
+        const bool matchingResolution =
+            !calib.imageSize.isValid()
+            || calib.imageSize == QSize(display.cols, display.rows);
+        if (showUndistorted && calib.success && matchingResolution) {
             cv::Mat tmp;
             if (calib.options.cameraModel == CameraModel::Fisheye) {
                 cv::fisheye::undistortImage(
@@ -832,6 +889,208 @@ bool Calibrator::exportParameters(const QString& filePath,
     } catch (const std::exception& exception) {
         if (error) {
             *error = QObject::tr("错误：%1")
+                         .arg(QString::fromLocal8Bit(exception.what()));
+        }
+    }
+    return false;
+}
+
+std::optional<CalibrationResult> Calibrator::importParameters(
+    const QString& filePath, QString* error) const
+{
+    if (error) {
+        error->clear();
+    }
+    try {
+        cv::FileStorage storage(filePath.toStdString(), cv::FileStorage::READ);
+        if (!storage.isOpened()) {
+            if (error) {
+                *error = QObject::tr("无法打开参数文件。");
+            }
+            return std::nullopt;
+        }
+
+        CalibrationResult result;
+        cv::String cameraModel;
+        readIfPresent(storage, "camera_model", cameraModel);
+        result.options.cameraModel = cameraModel == "fisheye"
+                                         ? CameraModel::Fisheye
+                                         : CameraModel::Pinhole;
+        if (!parseCameraMatrix(storage["camera_matrix"],
+                               result.cameraMatrix)) {
+            if (error) {
+                *error = QObject::tr("camera_matrix 必须是有效的 3×3 矩阵。");
+            }
+            return std::nullopt;
+        }
+        storage["distortion_coefficients"] >> result.distCoeffs;
+        if (result.distCoeffs.empty() || result.distCoeffs.channels() != 1) {
+            if (error) {
+                *error = QObject::tr("distortion_coefficients 无效。");
+            }
+            return std::nullopt;
+        }
+        result.distCoeffs = result.distCoeffs.reshape(1, 1);
+        result.distCoeffs.convertTo(result.distCoeffs, CV_64F);
+        const size_t expectedCount =
+            result.options.cameraModel == CameraModel::Fisheye ? 4U : 5U;
+        if (result.distCoeffs.total() != expectedCount
+            || !cv::checkRange(result.cameraMatrix)
+            || !cv::checkRange(result.distCoeffs)
+            || result.cameraMatrix.at<double>(0, 0) <= 0.0
+            || result.cameraMatrix.at<double>(1, 1) <= 0.0) {
+            if (error) {
+                *error = QObject::tr(
+                    "参数数值无效，或畸变系数数量与相机模型不匹配。");
+            }
+            return std::nullopt;
+        }
+
+        int imageWidth = 0;
+        int imageHeight = 0;
+        readIfPresent(storage, "image_width", imageWidth);
+        readIfPresent(storage, "image_height", imageHeight);
+        if (imageWidth <= 0 || imageHeight <= 0) {
+            if (error) {
+                *error = QObject::tr("参数文件缺少有效的 image_width/image_height。");
+            }
+            return std::nullopt;
+        }
+        result.imageSize = {imageWidth, imageHeight};
+
+        cv::String boardType;
+        readIfPresent(storage, "board_type", boardType);
+        result.options.boardType = boardType == "chess"
+                                       ? CalibrationBoardType::Chessboard
+                                       : CalibrationBoardType::Charuco;
+        int boardColumns = result.options.boardSize.width();
+        int boardRows = result.options.boardSize.height();
+        readIfPresent(storage, "board_columns", boardColumns);
+        readIfPresent(storage, "board_rows", boardRows);
+        if (boardColumns >= 2 && boardRows >= 2) {
+            result.options.boardSize = {boardColumns, boardRows};
+        }
+        readIfPresent(storage, "square_size_mm", result.options.squareSize);
+        if (result.options.boardType == CalibrationBoardType::Charuco) {
+            readIfPresent(storage, "marker_size_mm", result.options.markerSize);
+            cv::String dictionary;
+            readIfPresent(storage, "aruco_dictionary", dictionary);
+            result.options.dictionary = parseDictionaryName(dictionary);
+        } else {
+            cv::String method;
+            readIfPresent(storage, "corner_detection_method", method);
+            result.options.method = method == "findChessboardCornersSB"
+                                        ? CalibrationMethod::SectorBased
+                                        : CalibrationMethod::Classic;
+        }
+        int flag = 0;
+        if (result.options.cameraModel == CameraModel::Fisheye) {
+            readIfPresent(storage, "estimate_skew", flag);
+            result.options.skew = flag != 0;
+        } else {
+            flag = 1;
+            readIfPresent(storage, "estimate_tangential_distortion", flag);
+            result.options.tangential = flag != 0;
+        }
+        result.options.radialCoeffs =
+            result.options.cameraModel == CameraModel::Fisheye ? 4 : 3;
+        readIfPresent(storage, "radial_coefficients",
+                      result.options.radialCoeffs);
+        readIfPresent(storage, "rms_reprojection_error", result.rmsError);
+        flag = 0;
+        readIfPresent(storage, "quality_warning", flag);
+        result.qualityWarning = flag != 0;
+        readIfPresent(storage, "images_used", result.imagesUsed);
+        readIfPresent(storage, "images_total", result.imagesTotal);
+        const int maximumRadial =
+            result.options.cameraModel == CameraModel::Fisheye ? 4 : 3;
+        if (result.options.radialCoeffs < 2
+            || result.options.radialCoeffs > maximumRadial
+            || !std::isfinite(result.options.squareSize)
+            || result.options.squareSize <= 0.0
+            || !std::isfinite(result.rmsError)) {
+            if (error) {
+                *error = QObject::tr("参数文件中的标定选项或 RMS 数值无效。");
+            }
+            return std::nullopt;
+        }
+        result.sourceDirectory = QFileInfo(filePath).absolutePath();
+        result.success = true;
+        result.report = QObject::tr(
+            "已导入相机参数。\n相机模型：%1\n图像尺寸：%2 × %3\nRMS：%4 px")
+                            .arg(cameraModelDisplayName(result.options.cameraModel))
+                            .arg(imageWidth)
+                            .arg(imageHeight)
+                            .arg(result.rmsError, 0, 'f', 3);
+        return result;
+    } catch (const cv::Exception& exception) {
+        if (error) {
+            *error = QObject::tr("OpenCV 错误：%1")
+                         .arg(QString::fromLocal8Bit(exception.what()));
+        }
+    } catch (const std::exception& exception) {
+        if (error) {
+            *error = QObject::tr("错误：%1")
+                         .arg(QString::fromLocal8Bit(exception.what()));
+        }
+    }
+    return std::nullopt;
+}
+
+bool Calibrator::undistortImageFile(const QString& inputPath,
+                                    const QString& outputPath,
+                                    const CalibrationResult& result,
+                                    QString* error) const
+{
+    if (error) {
+        error->clear();
+    }
+    if (!result.success || result.cameraMatrix.empty()
+        || result.distCoeffs.empty()) {
+        if (error) {
+            *error = QObject::tr("没有可用的标定参数。");
+        }
+        return false;
+    }
+    try {
+        const cv::Mat input =
+            cv::imread(inputPath.toStdString(), cv::IMREAD_UNCHANGED);
+        if (input.empty()) {
+            if (error) {
+                *error = QObject::tr("无法读取输入图片。");
+            }
+            return false;
+        }
+        if (result.imageSize.isValid()
+            && result.imageSize != QSize(input.cols, input.rows)) {
+            if (error) {
+                *error = QObject::tr("图片分辨率 %1×%2 与标定分辨率 %3×%4 不一致。")
+                             .arg(input.cols)
+                             .arg(input.rows)
+                             .arg(result.imageSize.width())
+                             .arg(result.imageSize.height());
+            }
+            return false;
+        }
+        cv::Mat output;
+        if (result.options.cameraModel == CameraModel::Fisheye) {
+            cv::fisheye::undistortImage(
+                input, output, result.cameraMatrix, result.distCoeffs,
+                result.cameraMatrix, input.size());
+        } else {
+            cv::undistort(input, output, result.cameraMatrix,
+                          result.distCoeffs);
+        }
+        if (!cv::imwrite(outputPath.toStdString(), output)) {
+            if (error) {
+                *error = QObject::tr("无法写出图片。");
+            }
+            return false;
+        }
+        return true;
+    } catch (const cv::Exception& exception) {
+        if (error) {
+            *error = QObject::tr("OpenCV 错误：%1")
                          .arg(QString::fromLocal8Bit(exception.what()));
         }
     }
