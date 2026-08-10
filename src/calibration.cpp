@@ -777,18 +777,23 @@ bool Calibrator::exportParameters(const QString& filePath,
         storage << "]";
 
         cv::String yaml = storage.releaseAndGetString();
-        std::ostringstream distortionLine;
-        distortionLine.imbue(std::locale::classic());
-        distortionLine << std::setprecision(
-                              std::numeric_limits<double>::max_digits10)
-                       << "distortion_coefficients: [ ";
+        std::ostringstream distortionBlock;
+        distortionBlock.imbue(std::locale::classic());
+        distortionBlock
+            << std::setprecision(
+                   std::numeric_limits<double>::max_digits10)
+            << "distortion_coefficients: !!opencv-matrix\n"
+            << "   rows: 1\n"
+            << "   cols: " << distortionCoefficients.cols << '\n'
+            << "   dt: d\n"
+            << "   data: [ ";
         for (int col = 0; col < distortionCoefficients.cols; ++col) {
             if (col > 0) {
-                distortionLine << ", ";
+                distortionBlock << ", ";
             }
-            distortionLine << distortionCoefficients.at<double>(0, col);
+            distortionBlock << distortionCoefficients.at<double>(0, col);
         }
-        distortionLine << " ]";
+        distortionBlock << " ]";
 
         const cv::String distortionKey = "distortion_coefficients:";
         const size_t lineStart = yaml.find(distortionKey);
@@ -799,7 +804,7 @@ bool Calibrator::exportParameters(const QString& filePath,
             }
             return false;
         }
-        yaml.replace(lineStart, lineEnd - lineStart, distortionLine.str());
+        yaml.replace(lineStart, lineEnd - lineStart, distortionBlock.str());
         QSaveFile output(filePath);
         if (!output.open(QIODevice::WriteOnly)) {
             if (error) {

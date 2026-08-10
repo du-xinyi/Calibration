@@ -195,13 +195,28 @@ int main(int argc, char* argv[])
         qCritical() << "导出的 YAML 缺少 distortion_coefficients";
         return EXIT_FAILURE;
     }
-    const qsizetype distortionLineEnd =
-        yamlText.indexOf('\n', distortionLineStart);
-    const QByteArray distortionLine = yamlText.mid(
-        distortionLineStart, distortionLineEnd - distortionLineStart);
-    if (distortionLineEnd < 0 || !distortionLine.contains('[')
-        || !distortionLine.contains(']')) {
-        qCritical() << "distortion_coefficients 没有在一行内导出";
+    const qsizetype distortionBlockEnd =
+        yamlText.indexOf(QByteArrayLiteral("\nposes:"), distortionLineStart);
+    const QByteArray distortionBlock = yamlText.mid(
+        distortionLineStart, distortionBlockEnd - distortionLineStart);
+    const qsizetype dataLineStart =
+        distortionBlock.indexOf(QByteArrayLiteral("data:"));
+    const qsizetype dataLineBreak =
+        distortionBlock.indexOf('\n', dataLineStart);
+    const qsizetype dataLineEnd =
+        dataLineBreak < 0 ? distortionBlock.size() : dataLineBreak;
+    const QByteArray dataLine = distortionBlock.mid(
+        dataLineStart, dataLineEnd - dataLineStart);
+    if (distortionBlockEnd < 0
+        || !distortionBlock.contains(QByteArrayLiteral("!!opencv-matrix"))
+        || !distortionBlock.contains(QByteArrayLiteral("rows: 1"))
+        || !distortionBlock.contains(QByteArrayLiteral("cols: 5"))
+        || !distortionBlock.contains(QByteArrayLiteral("dt: d"))
+        || dataLineStart < 0
+        || !dataLine.contains('[') || !dataLine.contains(']')) {
+        qCritical().noquote()
+            << "distortion_coefficients 的矩阵元数据或单行 data 错误：\n"
+            << distortionBlock;
         return EXIT_FAILURE;
     }
 
@@ -221,8 +236,6 @@ int main(int argc, char* argv[])
     cv::String cameraModel;
     cv::String boardType;
     const cv::FileNode exportedCameraMatrix = exported["camera_matrix"];
-    const cv::FileNode exportedDistortion =
-        exported["distortion_coefficients"];
     const cv::FileNode exportedPoses = exported["poses"];
     double firstPoseError = 0.0;
     if (!exportedCameraMatrix.isSeq()
@@ -241,14 +254,7 @@ int main(int argc, char* argv[])
             exportedRow[col] >> cameraMatrix.at<double>(row, col);
         }
     }
-    if (!exportedDistortion.isSeq() || exportedDistortion.size() != 5) {
-        qCritical() << "导出的 distortion_coefficients 不是 1×5 数组";
-        return EXIT_FAILURE;
-    }
-    distortion = cv::Mat::zeros(1, 5, CV_64F);
-    for (int index = 0; index < distortion.cols; ++index) {
-        exportedDistortion[index] >> distortion.at<double>(0, index);
-    }
+    exported["distortion_coefficients"] >> distortion;
     exported["format_version"] >> formatVersion;
     exported["image_width"] >> imageWidth;
     exported["image_height"] >> imageHeight;
@@ -323,18 +329,7 @@ int main(int argc, char* argv[])
     cv::String fisheyeModel;
     cv::Mat fisheyeDistortion;
     fisheyeExported["camera_model"] >> fisheyeModel;
-    const cv::FileNode fisheyeDistortionNode =
-        fisheyeExported["distortion_coefficients"];
-    if (!fisheyeDistortionNode.isSeq()
-        || fisheyeDistortionNode.size() != 4) {
-        qCritical() << "导出的鱼眼畸变系数不是 1×4 数组";
-        return EXIT_FAILURE;
-    }
-    fisheyeDistortion = cv::Mat::zeros(1, 4, CV_64F);
-    for (int index = 0; index < fisheyeDistortion.cols; ++index) {
-        fisheyeDistortionNode[index]
-            >> fisheyeDistortion.at<double>(0, index);
-    }
+    fisheyeExported["distortion_coefficients"] >> fisheyeDistortion;
     if (fisheyeModel != "fisheye"
         || fisheyeDistortion.rows != 1 || fisheyeDistortion.cols != 4) {
         qCritical() << "导出的鱼眼模型参数不正确";
