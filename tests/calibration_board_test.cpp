@@ -161,6 +161,19 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
+    CalibrationResult invalidDistortionResult = result;
+    invalidDistortionResult.distCoeffs = cv::Mat::zeros(4, 1, CV_64F);
+    const QString invalidDistortionPath =
+        tempDir.filePath(QStringLiteral("invalid_distortion.yaml"));
+    exportError.clear();
+    if (calibrator.exportParameters(
+            invalidDistortionPath, invalidDistortionResult, &exportError)
+        || exportError.isEmpty()
+        || QFileInfo::exists(invalidDistortionPath)) {
+        qCritical() << "针孔模型的非 5 元畸变系数不应被导出";
+        return EXIT_FAILURE;
+    }
+
     exportError.clear();
     const QString exportPath =
         tempDir.filePath(QStringLiteral("camera_parameters.yaml"));
@@ -224,7 +237,9 @@ int main(int argc, char* argv[])
         || std::abs(firstPoseError - result.poses.front().reprojectionError)
                > 1.0e-12
         || cv::norm(cameraMatrix, result.cameraMatrix, cv::NORM_INF) > 1.0e-12
-        || cv::norm(distortion, result.distCoeffs, cv::NORM_INF) > 1.0e-12) {
+        || distortion.rows != 1 || distortion.cols != 5
+        || cv::norm(distortion, result.distCoeffs.reshape(1, 1),
+                    cv::NORM_INF) > 1.0e-12) {
         qCritical() << "导出的 YAML 内容与标定结果不一致";
         return EXIT_FAILURE;
     }
@@ -277,7 +292,8 @@ int main(int argc, char* argv[])
     cv::Mat fisheyeDistortion;
     fisheyeExported["camera_model"] >> fisheyeModel;
     fisheyeExported["distortion_coefficients"] >> fisheyeDistortion;
-    if (fisheyeModel != "fisheye" || fisheyeDistortion.total() != 4) {
+    if (fisheyeModel != "fisheye"
+        || fisheyeDistortion.rows != 1 || fisheyeDistortion.cols != 4) {
         qCritical() << "导出的鱼眼模型参数不正确";
         return EXIT_FAILURE;
     }

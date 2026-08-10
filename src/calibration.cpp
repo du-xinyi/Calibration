@@ -686,6 +686,16 @@ bool Calibrator::exportParameters(const QString& filePath,
         }
         return false;
     }
+    const size_t expectedDistortionCount =
+        result.options.cameraModel == CameraModel::Fisheye ? 4U : 5U;
+    if (result.distCoeffs.channels() != 1
+        || result.distCoeffs.total() != expectedDistortionCount) {
+        if (error) {
+            *error = QObject::tr(
+                "畸变系数数量与相机模型不匹配：针孔模型需要 5 个，鱼眼模型需要 4 个。");
+        }
+        return false;
+    }
 
     try {
         cv::FileStorage storage(
@@ -741,7 +751,10 @@ bool Calibrator::exportParameters(const QString& filePath,
             storage.endWriteStruct();
         }
         storage.endWriteStruct();
-        storage << "distortion_coefficients" << result.distCoeffs;
+        cv::Mat distortionCoefficients;
+        result.distCoeffs.reshape(1, 1).convertTo(
+            distortionCoefficients, CV_64F);
+        storage << "distortion_coefficients" << distortionCoefficients;
         storage << "poses" << "[";
         for (const CalibrationPose& pose : result.poses) {
             storage << "{"
