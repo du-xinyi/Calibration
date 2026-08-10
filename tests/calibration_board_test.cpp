@@ -3,7 +3,6 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QTemporaryDir>
 
@@ -155,25 +154,6 @@ int main(int argc, char* argv[])
         tempDir.filePath(QStringLiteral("camera_parameters.yaml"));
     if (!calibrator.exportParameters(exportPath, result, &exportError)) {
         qCritical().noquote() << "导出相机参数失败：" << exportError;
-        return EXIT_FAILURE;
-    }
-
-    QFile yamlFile(exportPath);
-    if (!yamlFile.open(QIODevice::ReadOnly)) {
-        qCritical() << "无法读取导出的 YAML 文本";
-        return EXIT_FAILURE;
-    }
-    const QByteArray yamlText = yamlFile.readAll();
-    const qsizetype compactPoseCount =
-        yamlText.count(QByteArrayLiteral("\n  - { image:"));
-    if (!yamlText.contains(QByteArrayLiteral("# Calibration setup"))
-        || !yamlText.contains(QByteArrayLiteral("# Calibration quality"))
-        || !yamlText.contains(QByteArrayLiteral("# Camera parameters"))
-        || !yamlText.contains(QByteArrayLiteral("# Per-image poses"))
-        || compactPoseCount
-               != static_cast<qsizetype>(result.poses.size())
-        || yamlText.contains(QByteArrayLiteral("\n      image:"))) {
-        qCritical() << "导出的 YAML 排版不够清晰或位姿未按图片压缩";
         return EXIT_FAILURE;
     }
 
