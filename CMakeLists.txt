@@ -134,17 +134,15 @@ set_target_properties(Calibration PROPERTIES
 include(CTest)
 
 if(BUILD_TESTING)
+    set(CALIBRATION_TEST_IMAGE_DIR
+        "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
+        CACHE PATH "Path to the external ChArUco calibration test dataset")
+
     add_executable(CalibrationCompletionTest
         tests/calibration_completion_test.cpp
     )
     target_link_libraries(CalibrationCompletionTest PRIVATE
         CalibrationUi
-    )
-
-    add_test(
-        NAME calibration_completion_does_not_crash
-        COMMAND CalibrationCompletionTest
-                "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
     )
 
     add_executable(CalibrationComparisonLifecycleTest
@@ -154,20 +152,6 @@ if(BUILD_TESTING)
         CalibrationUi
     )
 
-    add_test(
-        NAME algorithm_comparison_lifecycle_does_not_crash
-        COMMAND CalibrationComparisonLifecycleTest
-                "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
-    )
-    set_tests_properties(algorithm_comparison_lifecycle_does_not_crash PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-        TIMEOUT 45
-    )
-    set_tests_properties(calibration_completion_does_not_crash PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-        TIMEOUT 30
-    )
-
     add_executable(CalibrationBoardTest
         tests/calibration_board_test.cpp
     )
@@ -175,12 +159,38 @@ if(BUILD_TESTING)
         CalibrationCore
     )
 
-    add_test(
-        NAME calibration_board_types_and_square_counts
-        COMMAND CalibrationBoardTest
-                "${CMAKE_CURRENT_SOURCE_DIR}/image/arx_camera0"
-    )
-    set_tests_properties(calibration_board_types_and_square_counts PROPERTIES
-        TIMEOUT 30
-    )
+    if(IS_DIRECTORY "${CALIBRATION_TEST_IMAGE_DIR}")
+        add_test(
+            NAME calibration_completion_does_not_crash
+            COMMAND CalibrationCompletionTest
+                    "${CALIBRATION_TEST_IMAGE_DIR}"
+        )
+        set_tests_properties(calibration_completion_does_not_crash PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            TIMEOUT 30
+        )
+
+        add_test(
+            NAME algorithm_comparison_lifecycle_does_not_crash
+            COMMAND CalibrationComparisonLifecycleTest
+                    "${CALIBRATION_TEST_IMAGE_DIR}"
+        )
+        set_tests_properties(algorithm_comparison_lifecycle_does_not_crash PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            TIMEOUT 45
+        )
+
+        add_test(
+            NAME calibration_board_types_and_square_counts
+            COMMAND CalibrationBoardTest
+                    "${CALIBRATION_TEST_IMAGE_DIR}"
+        )
+        set_tests_properties(calibration_board_types_and_square_counts PROPERTIES
+            TIMEOUT 30
+        )
+    else()
+        message(STATUS
+            "Calibration test dataset not found at ${CALIBRATION_TEST_IMAGE_DIR}; "
+            "data-dependent tests will not be registered")
+    endif()
 endif()

@@ -144,9 +144,17 @@ distortion_coefficients: !!opencv-matrix
 
 ## 运行测试
 
+仓库不包含标定图片。运行数据相关测试时，通过 `CALIBRATION_TEST_IMAGE_DIR` 指向外部 ChArUco 图片目录：
+
 ```bash
+cmake -S . -B build \
+  -DBUILD_TESTING=ON \
+  -DCALIBRATION_TEST_IMAGE_DIR=/path/to/charuco/images
+cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
+
+测试图片应为默认配置对应的 `14×9` ChArUco 标定板，方格尺寸 `20 mm`、标记尺寸 `15 mm`、字典 `DICT_5X5_100`。未提供有效目录时，CMake 仍会构建测试程序，但不会注册依赖外部图片的数据测试。
 
 测试覆盖标定板检测、针孔与鱼眼求解、YAML 导入导出、项目文件、质量预检、去畸变、算法对比生命周期和 GUI 状态管理。全部通过时 `ctest` 返回退出码 `0`。
 
@@ -182,5 +190,4 @@ tests/
   calibration_board_test.cpp                  核心功能测试
   calibration_completion_test.cpp             GUI 标定流程测试
   calibration_comparison_lifecycle_test.cpp   算法对比生命周期测试
-image/                                          示例与测试图片
 ```
