@@ -363,6 +363,7 @@ void MainWindow::updateUiState()
     poseAction_->setToolTip(
         hasCalibration ? tr("查看位姿估计结果")
                        : tr("完成一次成功标定后查看位姿"));
+    showUndistortedCheck_->setEnabled(hasCalibration && !busy);
     ui_->rightPanel->setEnabled(!busy);
     imageList_->setEnabled(!busy);
 }
@@ -370,6 +371,7 @@ void MainWindow::updateUiState()
 void MainWindow::invalidateCalibrationResult()
 {
     lastResult_ = {};
+    showUndistortedCheck_->setChecked(false);
     if (statusRmsError_ != nullptr) {
         statusRmsError_->setText(tr("RMS: --"));
     }

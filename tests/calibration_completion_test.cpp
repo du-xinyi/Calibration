@@ -128,6 +128,7 @@ int main(int argc, char* argv[])
         || showUndistortedCheck == nullptr
         || showUndistortedCheck->text()
                != QStringLiteral("Show Undistorted")
+        || showUndistortedCheck->isEnabled()
         || radialCoeffSpin == nullptr || radialCoeffSpin->maximum() != 3
         || calibrateAction == nullptr || calibrateAction->isEnabled()
         || calibrateAction->icon().isNull()
@@ -230,14 +231,18 @@ int main(int argc, char* argv[])
                 widget->close();
 
                 if (!rightPanel->isEnabled()
-                    || !cameraModelCombo->isEnabled()) {
+                    || !cameraModelCombo->isEnabled()
+                    || !showUndistortedCheck->isEnabled()) {
                     qCritical() << "标定结束后参数控件没有恢复";
                     app.exit(EXIT_FAILURE);
                     return;
                 }
+                showUndistortedCheck->setChecked(true);
                 cameraModelCombo->setCurrentIndex(1);
-                if (exportAction->isEnabled() || poseAction->isEnabled()) {
-                    qCritical() << "切换标定算法后旧结果没有失效";
+                if (exportAction->isEnabled() || poseAction->isEnabled()
+                    || showUndistortedCheck->isChecked()
+                    || showUndistortedCheck->isEnabled()) {
+                    qCritical() << "切换标定算法后旧结果状态没有清除";
                     app.exit(EXIT_FAILURE);
                     return;
                 }
