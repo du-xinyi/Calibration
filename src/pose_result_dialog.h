@@ -19,68 +19,82 @@ class PoseResultDialog;
 }
 
 /**
- * @brief 绘制类似 MATLAB showExtrinsics 的相机/标定板外参视图。
+ * @brief 将逐图外参绘制为可旋转、可缩放的三维线框场景
  */
 class PoseVisualizationWidget final : public QWidget {
 public:
     /**
-     * @brief 位姿场景的参考坐标系
+     * @brief 位姿场景中保持静止的参考对象
      */
     enum class ViewStyle {
-        CameraCentric,  ///< 固定相机坐标系，绘制各标定板位姿
-        PatternCentric, ///< 固定标定板坐标系，绘制各相机位姿
+        CameraCentric, ///< 固定相机并显示各标定板
+        PatternCentric, ///< 固定标定板并显示各相机
     };
 
     /**
-     * @brief 创建可交互的位姿可视化控件
+     * @brief 创建位姿绘制控件
      *
-     * @param parent 父控件，可为 nullptr
+     * @param parent Qt 对象树中的父控件，允许为空
      */
     explicit PoseVisualizationWidget(QWidget* parent = nullptr);
 
     /**
-     * @brief 销毁控件及其内部几何缓存
+     * @brief 释放内部场景几何数据
      */
     ~PoseVisualizationWidget() override;
 
     /**
-     * @brief 设置待显示的标定结果并重建场景
+     * @brief 替换当前标定结果并重新生成场景
      *
-     * @param result 包含逐图外参的成功标定结果
+     * @param result 含逐图外参的标定结果
      */
     void setCalibrationResult(const CalibrationResult& result);
 
     /**
-     * @brief 切换场景的参考坐标系并重置观察视角
+     * @brief 更改场景参考对象
      *
-     * @param style 新的参考坐标系
+     * @param style 新视图模式
      */
     void setViewStyle(ViewStyle style);
 
     /**
-     * @brief 高亮指定的原始位姿索引
+     * @brief 设置需要强调显示的位姿
      *
-     * @param index result.poses 中的索引；负值表示不高亮
+     * @param index result.poses 中的下标，负值表示取消高亮
      */
     void setHighlightedPose(int index);
 
     /**
-     * @brief 返回布局系统使用的建议显示尺寸
+     * @brief 提供布局使用的首选控件尺寸
      *
-     * @return 建议的控件尺寸
+     * @return 首选宽高
      */
     QSize sizeHint() const override;
 
 protected:
-    /// 将三维几何正交投影到控件平面并绘制
+    /**
+     * @brief 投影并绘制当前三维场景
+     */
     void paintEvent(QPaintEvent* event) override;
-    /// 开始鼠标拖动旋转
+
+    /**
+     * @brief 记录旋转交互的起始位置
+     */
     void mousePressEvent(QMouseEvent* event) override;
-    /// 根据鼠标位移更新观察角度
+
+    /**
+     * @brief 将拖动距离换算为观察角度
+     */
     void mouseMoveEvent(QMouseEvent* event) override;
-    /// 结束鼠标拖动旋转
+
+    /**
+     * @brief 结束旋转交互
+     */
     void mouseReleaseEvent(QMouseEvent* event) override;
-    /// 根据滚轮增量缩放场景
+
+    /**
+     * @brief 调整场景缩放倍率
+     */
     void wheelEvent(QWheelEvent* event) override;
 
 private:
@@ -89,47 +103,47 @@ private:
     void resetView();
     void rebuildGeometry();
 
-    // === 场景数据 ===
-    CalibrationResult result_;                    ///< 当前显示的标定结果副本
-    std::unique_ptr<Geometry> geometry_;           ///< 投影前的线段与标签缓存
-    ViewStyle viewStyle_ = ViewStyle::CameraCentric; ///< 当前参考坐标系
-    int highlightedPose_ = 0;                     ///< result_.poses 中的高亮索引
+    // === 可视化数据 ===
+    CalibrationResult result_; ///< 当前场景使用的标定结果副本
+    std::unique_ptr<Geometry> geometry_;
+    ViewStyle viewStyle_ = ViewStyle::CameraCentric; ///< 当前固定的参考对象
+    int highlightedPose_ = 0; ///< 需要使用强调样式的位姿下标
 
-    // === 交互视角 ===
-    QPointF lastMousePosition_;      ///< 上一次拖动事件的鼠标位置
-    double yawDegrees_ = 45.0;       ///< 水平旋转角度
-    double pitchDegrees_ = 30.0;     ///< 垂直旋转角度，限制在 ±85°
-    double zoom_ = 1.0;              ///< 用户缩放倍率，限制在 0.25–5.0
-    bool dragging_ = false;          ///< 是否正在用鼠标左键旋转视角
+    // === 观察器交互状态 ===
+    QPointF lastMousePosition_; ///< 最近一次拖动位置
+    double yawDegrees_ = 45.0; ///< 水平观察角
+    double pitchDegrees_ = 30.0; ///< 垂直观察角
+    double zoom_ = 1.0; ///< 额外缩放倍率，范围为 0.25–5.0
+    bool dragging_ = false; ///< 鼠标左键是否正在控制视角
 };
 
 /**
- * @brief 展示全部有效标定图片的外参数值与位姿分布。
+ * @brief 联动展示逐图外参数值、误差排序和三维位姿
  */
 class PoseResultDialog final : public QDialog {
     Q_OBJECT
 
 public:
     /**
-     * @brief 创建位姿结果对话框
+     * @brief 使用一次标定结果创建位姿窗口
      *
-     * @param result 包含逐图外参的成功标定结果
-     * @param parent 父窗口，可为 nullptr
+     * @param result 含有效外参的标定结果
+     * @param parent Qt 对象树中的父窗口，允许为空
      */
     explicit PoseResultDialog(const CalibrationResult& result,
                               QWidget* parent = nullptr);
 
     /**
-     * @brief 销毁对话框及其界面资源
+     * @brief 销毁位姿窗口
      */
     ~PoseResultDialog() override;
 
 signals:
     /**
-     * @brief 请求主窗口移除勾选图片并使用剩余图片重新标定
+     * @brief 请求调用方移除指定图片并重新求解
      *
-     * @param imagePaths 待排除的图片路径
-     * @param baselineRms 排除图片前的整体 RMS，用于结果对比
+     * @param imagePaths 用户选中的图片路径
+     * @param baselineRms 移除图片前的整体 RMS
      */
     void excludeImagesRequested(const QStringList& imagePaths,
                                 double baselineRms);
@@ -140,6 +154,6 @@ private:
     void updateExcludeButton();
 
     std::unique_ptr<Ui::PoseResultDialog> ui_;
-    QPushButton* excludeButton_ = nullptr; ///< 排除所选项并重新标定的动作按钮
-    double baselineRms_ = 0.0;             ///< 创建对话框时的整体 RMS 基线
+    QPushButton* excludeButton_ = nullptr; ///< 由对话框按钮盒管理的排除动作
+    double baselineRms_ = 0.0; ///< 当前结果的误差比较基线
 };

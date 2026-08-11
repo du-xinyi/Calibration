@@ -7,15 +7,15 @@
 #include <vector>
 
 /**
- * @brief 展示同一数据集在不同相机模型与角点检测器下的标定结果。
+ * @brief 以表格汇总多个标定候选的求解状态、误差和核心内参
  */
 class AlgorithmComparisonDialog : public QDialog {
 public:
     /**
-     * @brief 创建算法结果对比对话框
+     * @brief 构造标定算法对比窗口
      *
-     * @param results 待展示的标定结果；对话框会按成功状态和 RMS 排序
-     * @param parent 父窗口，可为 nullptr
+     * @param results 候选标定结果，窗口内部按成功状态和 RMS 重新排序
+     * @param parent 所属窗口，允许为空
      */
     explicit AlgorithmComparisonDialog(
         std::vector<CalibrationResult> results,

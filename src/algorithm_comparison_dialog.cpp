@@ -37,7 +37,7 @@ QTableWidgetItem* numberItem(double value, int precision)
     return item;
 }
 
-}  // namespace
+}
 
 AlgorithmComparisonDialog::AlgorithmComparisonDialog(
     std::vector<CalibrationResult> results, QWidget* parent)
@@ -46,7 +46,8 @@ AlgorithmComparisonDialog::AlgorithmComparisonDialog(
     setObjectName(QStringLiteral("AlgorithmComparisonDialog"));
     setWindowTitle(tr("算法结果对比"));
     resize(900, 360);
-    // 成功结果优先，再按拟合误差升序排列；stable_sort 保留并列项的候选顺序
+
+    // 失败项统一后置；成功项按 RMS 从低到高展示
     std::stable_sort(results.begin(), results.end(),
                      [](const CalibrationResult& lhs,
                         const CalibrationResult& rhs) {

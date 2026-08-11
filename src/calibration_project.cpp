@@ -113,7 +113,7 @@ bool parseEnum(const QString& text, ArucoDictionary* value)
 
 bool validOptions(const CalibrationOptions& options)
 {
-    // 持久化边界只接受界面与 Calibrator 均能安全处理的参数范围
+    // 项目文件只保存能够被当前界面和求解器共同接受的参数组合
     return options.boardSize.width() >= 2
            && options.boardSize.height() >= 2
            && options.squareSize > 0.0
@@ -125,7 +125,7 @@ bool validOptions(const CalibrationOptions& options)
                   <= (options.cameraModel == CameraModel::Fisheye ? 4 : 3);
 }
 
-}  // namespace
+}
 
 bool CalibrationProjectIo::save(const QString& filePath,
                                 const CalibrationProject& project,
@@ -141,7 +141,6 @@ bool CalibrationProjectIo::save(const QString& filePath,
         return false;
     }
 
-    // format_version 与稳定的字符串枚举共同构成项目文件的兼容边界
     const CalibrationOptions& options = project.options;
     QJsonObject optionObject{
         {QStringLiteral("camera_model"), enumName(options.cameraModel)},
@@ -159,7 +158,7 @@ bool CalibrationProjectIo::save(const QString& filePath,
     QJsonArray images;
     const QDir baseDirectory = QFileInfo(filePath).absoluteDir();
     for (const QString& imagePath : project.imagePaths) {
-        // 使用相对路径便于将项目文件和图片目录整体移动到其他位置
+        // 相对路径让项目文件与图片目录能够作为一个整体迁移
         images.append(baseDirectory.relativeFilePath(imagePath));
     }
     const QJsonDocument document(QJsonObject{
@@ -168,7 +167,7 @@ bool CalibrationProjectIo::save(const QString& filePath,
         {QStringLiteral("images"), images},
     });
 
-    // QSaveFile 仅在完整写入后替换目标文件，避免留下半截 JSON
+    // 写入失败时保留旧项目文件，不暴露不完整的 JSON
     QSaveFile output(filePath);
     const QByteArray data = document.toJson(QJsonDocument::Indented);
     if (!output.open(QIODevice::WriteOnly)
@@ -205,7 +204,7 @@ std::optional<CalibrationProject> CalibrationProjectIo::load(
         }
         return std::nullopt;
     }
-    // 先验证顶层结构和版本，再读取各字段，避免把缺失值当成默认值接受
+
     const QJsonObject root = document.object();
     const QJsonObject object = root.value(QStringLiteral("options")).toObject();
     const QJsonArray images = root.value(QStringLiteral("images")).toArray();
@@ -217,7 +216,7 @@ std::optional<CalibrationProject> CalibrationProjectIo::load(
         return std::nullopt;
     }
 
-    // 枚举必须严格匹配已知字符串，未知的新值不会被静默降级
+    // 字符串枚举采用严格解析，未知值不能悄悄回退到默认模型
     CalibrationProject project;
     CalibrationOptions& options = project.options;
     if (!parseEnum(object.value(QStringLiteral("camera_model")).toString(),
@@ -250,7 +249,6 @@ std::optional<CalibrationProject> CalibrationProjectIo::load(
         return std::nullopt;
     }
 
-    // 对外统一返回清理后的路径，调用方无需再区分绝对和相对形式
     const QDir baseDirectory = QFileInfo(filePath).absoluteDir();
     for (const QJsonValue& value : images) {
         if (!value.isString() || value.toString().isEmpty()) {
@@ -260,6 +258,7 @@ std::optional<CalibrationProject> CalibrationProjectIo::load(
             return std::nullopt;
         }
         const QString path = value.toString();
+        // 调用方始终获得规范化后的路径，不再承担项目目录解析职责
         project.imagePaths.push_back(
             QDir::cleanPath(QDir::isAbsolutePath(path)
                                 ? path

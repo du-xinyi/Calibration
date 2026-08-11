@@ -12,14 +12,12 @@ set(CMAKE_AUTOUIC ON)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 当 Qt6 未显式配置时自动探测其安装位置。
-# 兼容两种场景：PATH 含 qmake6（终端构建）、不含（CLion 等 GUI 启动）。
-# 注意：find_package 失败会把 Qt6_DIR 缓存成 *-NOTFOUND，因此用 EXISTS 显式校验
-# 并在重试前清掉失效缓存，否则后续配置会因「Qt6_DIR 已定义」而跳过探测。
+# 未提供有效 Qt6_DIR 时尝试定位 Qt，兼容终端与缺少 Qt PATH 的 IDE 环境
+# 失效的 CMake 缓存值必须先清除，否则后续探测不会覆盖 *-NOTFOUND
 if(NOT Qt6_DIR OR NOT EXISTS "${Qt6_DIR}/Qt6Config.cmake")
     unset(Qt6_DIR CACHE)
 
-    # 1) 优先用 PATH 中的 qmake6 查询安装前缀
+    # 首选由 qmake 报告的实际安装前缀
     find_program(QMAKE_EXECUTABLE qmake6 qmake)
     if(QMAKE_EXECUTABLE)
         execute_process(
@@ -34,7 +32,7 @@ if(NOT Qt6_DIR OR NOT EXISTS "${Qt6_DIR}/Qt6Config.cmake")
         endif()
     endif()
 
-    # 2) 回退：扫描 Qt 安装器常见目录（CLion 启动时 PATH 可能不含 Qt bin）
+    # qmake 不可见时再检查 Qt 安装器的常用目录结构
     if(NOT Qt6_DIR)
         file(GLOB _qt_install_dirs
             "/opt/Qt/[0-9]*/gcc_64"
@@ -58,10 +56,8 @@ endif()
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 
-# OpenCV 5 将 calib3d 拆分为 calib + objdetect + geometry 等模块：
-#   findChessboardCorners / findChessboardCornersSB / drawChessboardCorners / CALIB_CB_* -> objdetect
-#   calibrateCamera / CALIB_FIX_K3 / CALIB_ZERO_TANGENT_DIST                          -> calib
-#   Rodrigues                                                                          -> geometry
+# OpenCV 5 将原 calib3d 能力拆分到求解、特征检测和三维几何模块
+# 显式列出组件可避免链接到错误的旧版聚合目标
 file(GLOB _opencv5_dirs
     "/usr/local/lib/cmake/opencv5"
     "/usr/lib/x86_64-linux-gnu/cmake/opencv5"
@@ -118,7 +114,7 @@ target_link_libraries(CalibrationUi PUBLIC
     Qt6::Concurrent
 )
 
-# 将项目源码目录作为编译期常量传入，作为图片对话框的默认起始路径。
+# 开发构建默认从源码目录打开图片选择窗口
 target_compile_definitions(CalibrationUi PRIVATE
     PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
@@ -130,5 +126,4 @@ set_target_properties(Calibration PROPERTIES
     WIN32_EXECUTABLE OFF
     MACOSX_BUNDLE OFF
 )
-
 
