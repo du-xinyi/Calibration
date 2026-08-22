@@ -93,21 +93,21 @@ add_compile_options(
 )
 
 add_library(CalibrationCore STATIC
-    src/calibration.cpp
-    src/calibration_project.cpp
-    src/image_quality.cpp
+    src/core/calibration.cpp
+    src/core/calibration_project.cpp
+    src/core/image_quality.cpp
 )
-target_include_directories(CalibrationCore PUBLIC src)
+target_include_directories(CalibrationCore PUBLIC src/core)
 target_link_libraries(CalibrationCore PUBLIC Qt6::Gui ${OpenCV_LIBS})
 
 add_library(CalibrationUi STATIC
-    src/algorithm_comparison_dialog.cpp
-    src/mainwindow.cpp
-    src/mainwindow.ui
-    src/pose_result_dialog.cpp
-    src/pose_result_dialog.ui
+    src/ui/algorithm_comparison_dialog.cpp
+    src/ui/mainwindow.cpp
+    src/ui/mainwindow.ui
+    src/ui/pose_result_dialog.cpp
+    src/ui/pose_result_dialog.ui
 )
-target_include_directories(CalibrationUi PUBLIC src)
+target_include_directories(CalibrationUi PUBLIC src/ui)
 target_link_libraries(CalibrationUi PUBLIC
     CalibrationCore
     Qt6::Widgets
@@ -126,4 +126,3 @@ set_target_properties(camera-calibrator PROPERTIES
     WIN32_EXECUTABLE OFF
     MACOSX_BUNDLE OFF
 )
-

@@ -174,10 +174,13 @@ distortion_coefficients: !!opencv-matrix
 
 ```text
 src/
-  calibration.*                    标定、预览、参数导入导出和去畸变
-  calibration_project.*            标定项目 JSON 读写
-  image_quality.*                  图片质量预检
-  algorithm_comparison_dialog.*    算法结果对比
-  mainwindow.*                     主界面与异步任务
-  pose_result_dialog.*             单图误差、图片排除与三维位姿
+  main.cpp                          应用入口
+  core/
+    calibration.*                  标定、预览、参数导入导出和去畸变
+    calibration_project.*          标定项目 JSON 读写
+    image_quality.*                图片质量预检
+  ui/
+    algorithm_comparison_dialog.*  算法结果对比
+    mainwindow.*                   主界面与异步任务
+    pose_result_dialog.*           单图误差、图片排除与三维位姿
 ```
