@@ -17,15 +17,17 @@ inline constexpr double kPerViewRmsWarningThresholdPx = 2.0; ///< 单张图片�
 /**
  * @brief 标定板的图案类型
  */
-enum class CalibrationBoardType {
+enum class CalibrationBoardType
+{
     Chessboard, ///< 无编码标记的普通棋盘格
-    Charuco,    ///< 由棋盘格角点与 ArUco 标记组成的 ChArUco 板
+    Charuco, ///< 由棋盘格角点与 ArUco 标记组成的 ChArUco 板
 };
 
 /**
  * @brief 标定求解采用的成像模型
  */
-enum class CameraModel {
+enum class CameraModel
+{
     Pinhole, ///< 带径向和可选切向畸变的针孔模型
     Fisheye, ///< 使用四个径向参数的 OpenCV 鱼眼模型
 };
@@ -33,26 +35,29 @@ enum class CameraModel {
 /**
  * @brief 普通棋盘格的角点检测策略
  */
-enum class CalibrationMethod {
-    Classic,     ///< 传统检测并进行亚像素角点细化
+enum class CalibrationMethod
+{
+    Classic, ///< 传统检测并进行亚像素角点细化
     SectorBased, ///< 基于扇区的鲁棒棋盘格检测
 };
 
 /**
  * @brief ChArUco 标记可选用的预定义字典
  */
-enum class ArucoDictionary {
-    Dict4x4_50,  ///< 50 个 4×4 标记
+enum class ArucoDictionary
+{
+    Dict4x4_50, ///< 50 个 4×4 标记
     Dict5x5_100, ///< 100 个 5×5 标记
     Dict5x5_250, ///< 250 个 5×5 标记
     Dict6x6_250, ///< 250 个 6×6 标记
-    Original,    ///< OpenCV 早期版本提供的原始标记集合
+    Original, ///< OpenCV 早期版本提供的原始标记集合
 };
 
 /**
  * @brief 一次角点检测与标定求解所需的全部选项
  */
-struct CalibrationOptions {
+struct CalibrationOptions
+{
     CameraModel cameraModel = CameraModel::Pinhole; ///< 成像与畸变模型
     CalibrationBoardType boardType = CalibrationBoardType::Charuco; ///< 标定板图案
     QSize boardSize{14, 9}; ///< 标定板横向和纵向的方格数量
@@ -71,7 +76,8 @@ struct CalibrationOptions {
  * @details 外参满足 X_camera = R * X_board + t，R 由 rotationVector 经 Rodrigues
  * 变换得到，translationVector 与方格边长使用相同物理单位
  */
-struct CalibrationPose {
+struct CalibrationPose
+{
     QString imagePath; ///< 此位姿对应的输入图片
     cv::Vec3d rotationVector; ///< 标定板到相机坐标系的旋转向量
     cv::Vec3d translationVector; ///< 标定板到相机坐标系的平移向量
@@ -81,7 +87,8 @@ struct CalibrationPose {
 /**
  * @brief 标定求解或参数导入产生的结果对象
  */
-struct CalibrationResult {
+struct CalibrationResult
+{
     bool success = false; ///< 是否包含通过完整性检查的相机参数
     bool qualityWarning = false; ///< 是否有整体或单图 RMS 超出提示阈值
     double rmsError = 0.0; ///< 全部有效观测的重投影 RMS
@@ -101,8 +108,10 @@ struct CalibrationResult {
  *
  * @details 批量求解支持进度通知和协作式取消；预览接口会在对象内部缓存最近一次检测结果
  */
-class Calibrator {
+class Calibrator
+{
 public:
+
     /**
      * @brief 单图检测结束后的进度通知，参数依次为已处理数、总数和检测状态
      */
@@ -126,10 +135,10 @@ public:
      *
      * @return 绘制检测结果后的图片；读取或处理失败时返回空 QImage
      */
-    QImage previewImage(const QString& filePath,
-                        const CalibrationOptions& opts,
-                        const CalibrationResult& calib, bool showUndistorted,
-                        bool* found = nullptr);
+    QImage previewImage(const QString &filePath,
+        const CalibrationOptions &opts,
+        const CalibrationResult &calib, bool showUndistorted,
+        bool *found = nullptr);
 
     /**
      * @brief 从一组图片估计相机内参、畸变参数和逐图外参
@@ -143,10 +152,10 @@ public:
      *
      * @return 包含求解状态、质量指标和用户报告的标定结果
      */
-    CalibrationResult calibrate(const QStringList& files,
-                                const CalibrationOptions& opts,
-                                ProgressCallback progress = nullptr,
-                                CancelPredicate isCanceled = nullptr);
+    CalibrationResult calibrate(const QStringList &files,
+        const CalibrationOptions &opts,
+        ProgressCallback progress = nullptr,
+        CancelPredicate isCanceled = nullptr);
 
     /**
      * @brief 以 OpenCV 可读取的 YAML 格式原子导出相机参数
@@ -157,9 +166,9 @@ public:
      *
      * @return 参数有效且文件提交成功时返回 true
      */
-    bool exportParameters(const QString& filePath,
-                          const CalibrationResult& result,
-                          QString* error = nullptr) const;
+    bool exportParameters(const QString &filePath,
+        const CalibrationResult &result,
+        QString *error = nullptr) const;
 
     /**
      * @brief 从 YAML 文件导入并验证相机参数
@@ -172,7 +181,7 @@ public:
      * @return 有效参数；文件无法读取或数据不满足约束时返回 std::nullopt
      */
     std::optional<CalibrationResult> importParameters(
-        const QString& filePath, QString* error = nullptr) const;
+        const QString &filePath, QString *error = nullptr) const;
 
     /**
      * @brief 使用标定结果校正单张图片并写入新文件
@@ -186,12 +195,13 @@ public:
      *
      * @return 图片成功校正并写出时返回 true
      */
-    bool undistortImageFile(const QString& inputPath,
-                            const QString& outputPath,
-                            const CalibrationResult& result,
-                            QString* error = nullptr) const;
+    bool undistortImageFile(const QString &inputPath,
+        const QString &outputPath,
+        const CalibrationResult &result,
+        QString *error = nullptr) const;
 
 private:
+
     // === 预览检测缓存 ===
     QString previewCacheFilePath_; ///< 缓存对应的文件路径
     qint64 previewCacheFileSize_ = -1; ///< 缓存文件的字节数快照

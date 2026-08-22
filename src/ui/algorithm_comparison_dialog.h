@@ -9,8 +9,10 @@
 /**
  * @brief 以表格汇总多个标定候选的求解状态、误差和核心内参
  */
-class AlgorithmComparisonDialog : public QDialog {
+class AlgorithmComparisonDialog: public QDialog
+{
 public:
+
     /**
      * @brief 构造标定算法对比窗口
      *
@@ -19,5 +21,5 @@ public:
      */
     explicit AlgorithmComparisonDialog(
         std::vector<CalibrationResult> results,
-        QWidget* parent = nullptr);
+        QWidget *parent = nullptr);
 };

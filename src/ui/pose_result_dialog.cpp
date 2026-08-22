@@ -425,7 +425,7 @@ void PoseVisualizationWidget::mousePressEvent(QMouseEvent *event)
 
 void PoseVisualizationWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (dragging_ && event->buttons().testFlag(Qt::LeftButton))
+    if (dragging_ &&event->buttons().testFlag(Qt::LeftButton))
     {
         const QPointF delta = event->position() - lastMousePosition_;
         lastMousePosition_ = event->position();
