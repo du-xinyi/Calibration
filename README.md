@@ -1,18 +1,18 @@
 # camera-calibrator
 
-基于 Qt 6 和 OpenCV 5 的桌面相机标定工具，用于从普通棋盘格或 ChArUco 图片估计相机内参、畸变系数以及每张图片的标定板位姿。
+基于 Qt 6 和 OpenCV 5 的桌面相机标定工具。从普通棋盘格或 ChArUco 图片中估计相机内参、畸变系数，以及每张图片的标定板位姿。
 
 ## 主要功能
 
-- 支持 `Pinhole` 和 `Fisheye` 相机模型。
-- 支持普通棋盘格与 ChArUco 标定板。
+- 支持 `Pinhole`（针孔）和 `Fisheye`（鱼眼）相机模型。
+- 支持普通棋盘格与 ChArUco 标定板，内置多种 ArUco 字典。
 - 普通棋盘格可选择 `Classic` 或 `Sector-Based` 角点检测。
-- 后台执行标定、算法对比和批量去畸变，运行期间可取消。
-- 对图片进行模糊、曝光、亮暗裁切及相似画面预检。
+- 标定、算法对比和批量去畸变均在后台执行，运行期间可取消。
+- 对图片进行模糊、曝光、亮暗裁切及相似画面质量预检。
 - 显示整体 RMS、单图 RMS、内参、畸变系数和三维位姿分布。
-- 标记高误差图片，并支持排除后重新标定和比较 RMS 变化。
+- 标记高误差图片，支持排除后重新标定并比较 RMS 变化。
 - 保存和打开 `.calibration.json` 标定项目。
-- 导入、导出 OpenCV 兼容 YAML 参数。
+- 导入、导出 OpenCV 兼容的 YAML 相机参数。
 - 批量导出去畸变图片，并拒绝分辨率不匹配的输入。
 
 ## 环境要求
@@ -23,34 +23,33 @@
 - Qt 6：`Widgets`、`Concurrent`
 - OpenCV 5：`calib`、`geometry`、`objdetect`、`imgproc`、`imgcodecs`
 
-CMake 会尝试通过 `qmake6` 和常见安装目录查找 Qt 6，并优先使用系统中的 OpenCV 5 配置。
+CMake 会尝试通过 `qmake6` 和常见安装目录自动定位 Qt 6，并优先使用系统中的 OpenCV 5 配置。
 
 ## 构建与运行
 
 ```bash
 git clone https://github.com/du-xinyi/camera-calibrator.git
 cd camera-calibrator
-cmake -S . -B build -DBUILD_TESTING=ON
+cmake -S . -B build
 cmake --build build --parallel
-./build/Calibration
+./build/camera-calibrator
 ```
 
-程序成功启动后会显示“相机标定”主窗口。当前 CMake 可执行目标名为 `Calibration`，与仓库名不同。
+程序启动后显示“相机标定”主窗口。
 
 如果 CMake 无法自动找到依赖，请显式提供安装位置：
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/gcc_64 \
-  -DOpenCV_DIR=/path/to/opencv5/lib/cmake/opencv5 \
-  -DBUILD_TESTING=ON
+  -DOpenCV_DIR=/path/to/opencv5/lib/cmake/opencv5
 ```
 
 ## 快速开始
 
 1. 点击“图片”或“文件夹”，加载至少 3 张标定图片。
 2. 选择相机模型和标定板类型。
-3. 按实际标定板填写方格数、方格尺寸及 ChArUco 参数。
+3. 按实际标定板填写方格数、方格尺寸，以及 ChArUco 的标记尺寸和字典。
 4. 点击“标定”，等待角点检测与参数求解完成。
 5. 检查整体 RMS、单图 RMS、位姿分布和去畸变预览。
 6. 在位姿窗口中排除高误差图片，并根据需要重新标定。
@@ -81,7 +80,7 @@ cmake -S . -B build \
 - 画面边缘是否出现异常拉伸或波浪。
 - 更换部分图片后，内参与畸变系数是否稳定。
 
-“算法对比”会对同一批图片运行候选组合。普通棋盘格比较 `Pinhole/Fisheye × Classic/Sector-Based`，ChArUco 比较两种相机模型。
+“算法对比”会对同一批图片运行候选组合：普通棋盘格比较 `Pinhole/Fisheye × Classic/Sector-Based`，ChArUco 比较两种相机模型。
 
 ### 标定板参数
 
@@ -98,7 +97,7 @@ cmake -S . -B build \
 
 - `Tangential Distortion`：仅用于 `Pinhole`，控制是否估计 `p1`、`p2`。
 - `Skew`：仅用于 `Fisheye`；没有明确硬件依据时建议关闭。
-- `Radial Coeffs`：控制参与估计的径向畸变系数数量。
+- `Radial Coeffs`：控制参与估计的径向畸变系数数量（针孔 2–3，鱼眼 2–4）。
 
 修改模型、标定板参数、检测方法、畸变选项或标定图片后，旧标定结果会自动失效。
 
@@ -115,18 +114,27 @@ cmake -S . -B build \
 
 ### 标定项目
 
-“文件 → 保存项目”会将图片路径和标定选项写入 `.calibration.json`。项目文件不保存已经求解的内参、畸变系数或位姿；重新打开后需要再次标定。
+“文件 → 保存项目”会将图片路径和标定选项写入 `.calibration.json`。图片路径以项目文件目录为基准保存为相对路径。项目文件不保存已经求解的内参、畸变系数或位姿；重新打开后需要再次标定。
 
 ### YAML 参数
 
-导出文件的 `format_version` 当前为 `2`。针孔模型的畸变系数为 `1×5`，鱼眼模型为 `1×4`：
+导出的 `format_version` 当前为 `2`。针孔模型的畸变系数为 `1×5`，鱼眼模型为 `1×4`：
 
 ```yaml
 format_version: 2
 camera_model: pinhole
 image_width: 1920
 image_height: 1080
+board_type: charuco
+board_columns: 14
+board_rows: 9
+square_size_mm: 20.0
+marker_size_mm: 15.0
+aruco_dictionary: DICT_5X5_100
+radial_coefficients: 3
 rms_reprojection_error: 0.42
+images_used: 12
+images_total: 15
 camera_matrix:
    - [ 820.0, 0.0, 960.0 ]
    - [ 0.0, 821.0, 540.0 ]
@@ -138,25 +146,11 @@ distortion_coefficients: !!opencv-matrix
    data: [ -0.21, 0.05, 0.001, -0.001, -0.004 ]
 ```
 
+导出文件还包含每张图片的 `poses`（旋转向量、平移向量和单图误差），以及标定板与畸变选项等元信息，方便复现和追溯。
+
 导入时，`camera_matrix` 兼容 3×3 数组和 OpenCV `!!opencv-matrix`；畸变系数兼容行向量和列向量。参数文件必须包含有效的 `image_width` 和 `image_height`。
 
 相机参数只适用于标定分辨率。图片尺寸不一致时，预览不会应用去畸变，批量导出也会跳过对应图片。
-
-## 运行测试
-
-仓库不包含标定图片。运行数据相关测试时，通过 `CALIBRATION_TEST_IMAGE_DIR` 指向外部 ChArUco 图片目录：
-
-```bash
-cmake -S . -B build \
-  -DBUILD_TESTING=ON \
-  -DCALIBRATION_TEST_IMAGE_DIR=/path/to/charuco/images
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
-```
-
-测试图片应为默认配置对应的 `14×9` ChArUco 标定板，方格尺寸 `20 mm`、标记尺寸 `15 mm`、字典 `DICT_5X5_100`。未提供有效目录时，CMake 仍会构建测试程序，但不会注册依赖外部图片的数据测试。
-
-测试覆盖标定板检测、针孔与鱼眼求解、YAML 导入导出、项目文件、质量预检、去畸变、算法对比生命周期和 GUI 状态管理。全部通过时 `ctest` 返回退出码 `0`。
 
 ## 常见问题
 
@@ -186,8 +180,4 @@ src/
   algorithm_comparison_dialog.*    算法结果对比
   mainwindow.*                     主界面与异步任务
   pose_result_dialog.*             单图误差、图片排除与三维位姿
-tests/
-  calibration_board_test.cpp                  核心功能测试
-  calibration_completion_test.cpp             GUI 标定流程测试
-  calibration_comparison_lifecycle_test.cpp   算法对比生命周期测试
 ```

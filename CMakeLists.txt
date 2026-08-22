@@ -119,10 +119,10 @@ target_compile_definitions(CalibrationUi PRIVATE
     PROJECT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
-add_executable(Calibration src/main.cpp)
-target_link_libraries(Calibration PRIVATE CalibrationUi)
+add_executable(camera-calibrator src/main.cpp)
+target_link_libraries(camera-calibrator PRIVATE CalibrationUi)
 
-set_target_properties(Calibration PROPERTIES
+set_target_properties(camera-calibrator PROPERTIES
     WIN32_EXECUTABLE OFF
     MACOSX_BUNDLE OFF
 )
